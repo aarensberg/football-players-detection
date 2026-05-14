@@ -1,0 +1,6 @@
+.DS_Store
+__pycache__/
+.venv/
+.github/
+football-players-detection.v1i.yolov8/
+yolov8n.pt
