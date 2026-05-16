@@ -33,6 +33,7 @@ class DetectionTracker:
     def __init__(self, config: PipelineConfig) -> None:
         self.config = config
         model_path, self.using_fallback_model = self._resolve_model_path()
+        self.model_path_used = Path(model_path)
         self.model = YOLO(str(model_path))
         self.generic_aliases = {"person": "player", "sports ball": "ball"}
         self.football_aliases = {
@@ -53,7 +54,7 @@ class DetectionTracker:
                 "label aliases active (person->player, sports ball->ball)."
             )
         else:
-            print(f"[INFO] Using football-finetuned model: {model_path}")
+            print(f"[INFO] Using football-finetuned model: {self.model_path_used}")
 
     def _resolve_model_path(self) -> tuple[Path | str, bool]:
         if self.config.detector_weights_mode == "football_finetuned":

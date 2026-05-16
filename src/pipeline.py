@@ -5,7 +5,7 @@ from pathlib import Path
 from src.config import PipelineConfig
 from src.detection_tracking import DetectionTracker
 from src.team_assignment import TeamAssigner
-from src.video_io import VideoReader, VideoWriter
+from src.video_io import VideoReader, VideoWriter, build_output_video_path
 from src.visualization import draw_detections
 
 
@@ -14,11 +14,16 @@ def run_pipeline(config: PipelineConfig) -> Path:
         raise FileNotFoundError(f"Input video not found: {config.video_path}")
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = config.output_dir / f"{config.video_path.stem}_annotated.avi"
 
     reader = VideoReader(config.video_path)
-    writer = VideoWriter(output_path, reader.meta)
     detector = DetectionTracker(config)
+    output_path = build_output_video_path(
+        config.output_dir,
+        config.video_path,
+        detector.model_path_used,
+        extension="mp4",
+    )
+    writer = VideoWriter(output_path, reader.meta)
     team_assigner = TeamAssigner()
 
     processed_count = 0
@@ -71,4 +76,4 @@ def run_pipeline(config: PipelineConfig) -> Path:
         f"track_counts: team1={t_counts[1]}, team2={t_counts[2]}, "
         f"assignment_events={team_summary['assignment_events']}"
     )
-    return output_path
+    return writer.output_path
