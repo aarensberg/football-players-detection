@@ -4,6 +4,7 @@ from pathlib import Path
 
 from src.config import PipelineConfig
 from src.detection_tracking import DetectionTracker
+from src.team_assignment import TeamAssigner
 from src.video_io import VideoReader, VideoWriter
 from src.visualization import draw_detections
 
@@ -18,6 +19,7 @@ def run_pipeline(config: PipelineConfig) -> Path:
     reader = VideoReader(config.video_path)
     writer = VideoWriter(output_path, reader.meta)
     detector = DetectionTracker(config)
+    team_assigner = TeamAssigner()
 
     processed_count = 0
     try:
@@ -30,6 +32,16 @@ def run_pipeline(config: PipelineConfig) -> Path:
                 continue
 
             detections = detector.infer_and_track(frame, frame_idx)
+            team_assigner.assign(frame, detections)
+            for det in detections:
+                if det.object_type not in {"player", "goalkeeper"}:
+                    continue
+                if det.track_id < 0 or det.team_id is None:
+                    continue
+                player_tracks = detector.tracks.get("players", {}).get(frame_idx, {})
+                if det.track_id in player_tracks:
+                    player_tracks[det.track_id]["team_id"] = det.team_id
+                    player_tracks[det.track_id]["team_color"] = det.team_color
             annotated = draw_detections(frame, detections)
             writer.write(annotated)
             processed_count += 1
@@ -50,4 +62,13 @@ def run_pipeline(config: PipelineConfig) -> Path:
             f"Track summary - {bucket}: frames_with_tracks={len(frames)}, "
             f"tracked_objects={tracked_objects}"
         )
+
+    team_summary = team_assigner.summary()
+    t_counts = team_summary["track_team_counts"]
+    print(
+        "Team assignment summary - "
+        f"fitted={team_summary['fitted']}, "
+        f"track_counts: team1={t_counts[1]}, team2={t_counts[2]}, "
+        f"assignment_events={team_summary['assignment_events']}"
+    )
     return output_path

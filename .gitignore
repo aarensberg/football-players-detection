@@ -2,5 +2,8 @@
 __pycache__/
 .venv/
 .github/
+
+transcript.txt
 football-players-detection.v1i.yolov8/
 yolov8n.pt
+USAGE.txt
