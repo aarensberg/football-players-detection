@@ -40,6 +40,11 @@ class DetectionTracker:
         model_path, self.using_fallback_model = self._resolve_model_path()
         self.model_path_used = Path(model_path)
         self.model = YOLO(str(model_path))
+        # NOTE ABOUT THE 03_42 "ball-only collapse" bug:
+        # A previous version reused the same YOLO instance for the main `track(...)` pass and
+        # the ball ROI recovery pass. Mixing tracking and ball-only recovery calls on one model
+        # polluted tracker state across frames, which caused non-ball classes to disappear after
+        # a short time. Keep a dedicated predict-only model for ball recovery to isolate state.
         self.ball_roi_model = YOLO(str(model_path))
         self.generic_aliases = {"person": "player", "sports ball": "ball"}
         self.football_aliases = {
@@ -60,6 +65,7 @@ class DetectionTracker:
             "ball": {},
         }
         self.player_goalkeeper_state: Dict[int, Dict[str, object]] = {}
+        self.last_frame_debug: Dict[str, object] = {}
         if self.using_fallback_model:
             print(
                 "[INFO] Using generic YOLO model yolov8n.pt; "
@@ -206,20 +212,21 @@ class DetectionTracker:
         if len(self.ball_history) > self.ball_history_limit:
             self.ball_history = self.ball_history[-self.ball_history_limit :]
 
-    def _should_attempt_ball_recovery(self) -> bool:
-        if not self.config.ball_roi_recovery_enabled:
-            return False
-        if not self.ball_history:
-            return False
-        return self.ball_missed_frames <= self.config.ball_roi_max_missed_frames
-
     def _roi_bounds_from_prediction(
-        self, frame_shape: tuple[int, int, int], predicted_center: np.ndarray
+        self,
+        frame_shape: tuple[int, int, int],
+        predicted_center: np.ndarray,
+        reference_bbox: Optional[np.ndarray] = None,
     ) -> tuple[int, int, int, int]:
         frame_h, frame_w = frame_shape[:2]
-        last_bbox = np.array(self.ball_history[-1]["bbox"], dtype=float)
-        last_w = max(2.0, float(last_bbox[2] - last_bbox[0]))
-        last_h = max(2.0, float(last_bbox[3] - last_bbox[1]))
+        if reference_bbox is not None:
+            base_bbox = np.array(reference_bbox, dtype=float)
+        elif self.ball_history:
+            base_bbox = np.array(self.ball_history[-1]["bbox"], dtype=float)
+        else:
+            base_bbox = np.array([0.0, 0.0, 16.0, 16.0], dtype=float)
+        last_w = max(2.0, float(base_bbox[2] - base_bbox[0]))
+        last_h = max(2.0, float(base_bbox[3] - base_bbox[1]))
         side = max(32.0, max(last_w, last_h) * self.config.ball_roi_window_scale)
         half_side = side / 2.0
         cx = float(predicted_center[0])
@@ -234,11 +241,20 @@ class DetectionTracker:
             y2 = min(frame_h, y1 + 1)
         return x1, y1, x2, y2
 
-    def _attempt_ball_roi_recovery(self, frame: np.ndarray, frame_idx: int) -> Optional[Detection]:
-        predicted_center = self._predict_ball_center(frame_idx)
+    def _attempt_ball_roi_recovery(
+        self,
+        frame: np.ndarray,
+        frame_idx: int,
+        predicted_center: Optional[np.ndarray] = None,
+        reference_bbox: Optional[np.ndarray] = None,
+    ) -> Optional[Detection]:
+        if predicted_center is None:
+            predicted_center = self._predict_ball_center(frame_idx)
         if predicted_center is None:
             return None
-        x1, y1, x2, y2 = self._roi_bounds_from_prediction(frame.shape, predicted_center)
+        x1, y1, x2, y2 = self._roi_bounds_from_prediction(
+            frame.shape, predicted_center, reference_bbox=reference_bbox
+        )
         roi = frame[y1:y2, x1:x2]
         if roi.size == 0:
             return None
@@ -249,7 +265,10 @@ class DetectionTracker:
             source=roi,
             conf=self.config.ball_roi_conf_threshold,
             iou=self.config.ball_iou_threshold,
-            imgsz=max(64, min(self.config.imgsz, max(roi.shape[0], roi.shape[1]))),
+            imgsz=int(
+                np.ceil(max(64, min(self.config.imgsz, max(roi.shape[0], roi.shape[1]))) / 32.0)
+                * 32
+            ),
             device=self.config.device,
             classes=self.ball_class_ids,
             agnostic_nms=False,
@@ -333,35 +352,17 @@ class DetectionTracker:
                 best_det = cand
         return best_det
 
-    def _smooth_object_type(self, track_id: int, object_type: str) -> str:
-        if track_id < 0 or object_type not in {"player", "goalkeeper"}:
-            return object_type
+    @staticmethod
+    def _count_detections_by_type(detections: List[Detection]) -> Dict[str, int]:
+        counts = {"player": 0, "goalkeeper": 0, "referee": 0, "ball": 0}
+        for det in detections:
+            if det.object_type in counts:
+                counts[det.object_type] += 1
+        return counts
 
-        required = self.config.goalkeeper_switch_frames
-        state = self.player_goalkeeper_state.setdefault(
-            track_id,
-            {"stable": object_type, "candidate": None, "candidate_count": 0},
-        )
-        stable = str(state["stable"])
-        if object_type == stable:
-            state["candidate"] = None
-            state["candidate_count"] = 0
-            return stable
-
-        if state.get("candidate") == object_type:
-            state["candidate_count"] = int(state.get("candidate_count", 0)) + 1
-        else:
-            state["candidate"] = object_type
-            state["candidate_count"] = 1
-
-        if int(state["candidate_count"]) >= required:
-            state["stable"] = object_type
-            state["candidate"] = None
-            state["candidate_count"] = 0
-            return object_type
-        return stable
-
-    def infer_and_track(self, frame: np.ndarray, frame_idx: int) -> List[Detection]:
+    def _run_global_tracking_pass(
+        self, frame: np.ndarray, frame_idx: int
+    ) -> tuple[List[Detection], List[Detection], List[Detection]]:
         results = self.model.track(
             source=frame,
             persist=True,
@@ -392,8 +393,9 @@ class DetectionTracker:
         names = result.names if result.names is not None else self.model.names
         frame_area = float(frame.shape[0] * frame.shape[1])
 
-        detections: List[Detection] = []
-        ball_candidates: List[Detection] = []
+        global_detections: List[Detection] = []
+        non_ball_detections: List[Detection] = []
+        global_ball_candidates: List[Detection] = []
         for bbox, class_id, score, track_id in zip(xyxy, cls_ids, scores, track_ids):
             if isinstance(names, dict):
                 model_class = names.get(int(class_id), str(class_id))
@@ -423,13 +425,14 @@ class DetectionTracker:
                 score=float(score),
                 track_id=int(track_id),
             )
-            detections.append(det)
+            global_detections.append(det)
 
-            bucket = self._track_bucket(object_type)
-            if bucket == "ball":
-                ball_candidates.append(det)
+            if object_type == "ball":
+                global_ball_candidates.append(det)
                 continue
 
+            non_ball_detections.append(det)
+            bucket = self._track_bucket(object_type)
             if bucket and det.track_id >= 0:
                 self.tracks.setdefault(bucket, {}).setdefault(frame_idx, {})[det.track_id] = {
                     "bbox": det.bbox,
@@ -441,43 +444,179 @@ class DetectionTracker:
                     "status": "active",
                     "interpolated": False,
                 }
+        return global_detections, non_ball_detections, global_ball_candidates
 
-        if ball_candidates:
-            # Keep a single canonical ball track to stabilize downstream interpolation.
-            best_ball = self._select_best_ball_candidate(ball_candidates, frame_idx)
+    def _run_ball_only_full_frame(self, frame: np.ndarray) -> List[Detection]:
+        if not self.ball_class_ids:
+            return []
+        conf = (
+            self.config.ball_conf_threshold
+            if self.config.ball_conf_threshold is not None
+            else self.config.conf_threshold
+        )
+        results = self.ball_roi_model.predict(
+            source=frame,
+            conf=conf,
+            iou=self.config.ball_iou_threshold,
+            imgsz=self.config.imgsz,
+            device=self.config.device,
+            classes=self.ball_class_ids,
+            agnostic_nms=False,
+            verbose=False,
+        )
+        result = results[0]
+        if result.boxes is None or len(result.boxes) == 0:
+            return []
+
+        boxes = result.boxes
+        xyxy = boxes.xyxy.cpu().numpy()
+        cls_ids = boxes.cls.cpu().numpy().astype(int)
+        scores = boxes.conf.cpu().numpy()
+        names = result.names if result.names is not None else self.ball_roi_model.names
+        frame_area = float(frame.shape[0] * frame.shape[1])
+
+        candidates: List[Detection] = []
+        for bbox, class_id, score in zip(xyxy, cls_ids, scores):
+            if isinstance(names, dict):
+                model_class = str(names.get(int(class_id), str(class_id)))
+            elif isinstance(names, list) and int(class_id) < len(names):
+                model_class = str(names[int(class_id)])
+            else:
+                model_class = str(class_id)
+            if self._to_object_type(model_class) != "ball":
+                continue
+            if not self._passes_size_filters("ball", bbox, frame_area):
+                continue
+            candidates.append(
+                Detection(
+                    bbox=bbox.astype(float).tolist(),
+                    class_id=int(class_id),
+                    model_class=model_class,
+                    object_type="ball",
+                    score=float(score),
+                    track_id=self.canonical_ball_track_id,
+                )
+            )
+        return candidates
+
+    def _run_ball_only_detection(
+        self, frame: np.ndarray, frame_idx: int, global_ball_candidates: List[Detection]
+    ) -> List[Detection]:
+        if not self.config.ball_roi_recovery_enabled:
+            return []
+        candidates = self._run_ball_only_full_frame(frame)
+
+        predicted_center: Optional[np.ndarray] = None
+        reference_bbox: Optional[np.ndarray] = None
+        if global_ball_candidates:
+            best_global = self._select_best_ball_candidate(global_ball_candidates, frame_idx)
+            predicted_center = self._bbox_center_xy(np.array(best_global.bbox, dtype=float))
+            reference_bbox = np.array(best_global.bbox, dtype=float)
+        else:
+            predicted_center = self._predict_ball_center(frame_idx)
+            if self.ball_history:
+                reference_bbox = np.array(self.ball_history[-1]["bbox"], dtype=float)
+
+        if predicted_center is not None and (
+            self.ball_missed_frames <= self.config.ball_roi_max_missed_frames or global_ball_candidates
+        ):
+            roi_candidate = self._attempt_ball_roi_recovery(
+                frame,
+                frame_idx,
+                predicted_center=predicted_center,
+                reference_bbox=reference_bbox,
+            )
+            if roi_candidate is not None:
+                candidates.append(roi_candidate)
+        return candidates
+
+    def _smooth_object_type(self, track_id: int, object_type: str) -> str:
+        if track_id < 0 or object_type not in {"player", "goalkeeper"}:
+            return object_type
+
+        required = self.config.goalkeeper_switch_frames
+        state = self.player_goalkeeper_state.setdefault(
+            track_id,
+            {"stable": object_type, "candidate": None, "candidate_count": 0},
+        )
+        stable = str(state["stable"])
+        if object_type == stable:
+            state["candidate"] = None
+            state["candidate_count"] = 0
+            return stable
+
+        if state.get("candidate") == object_type:
+            state["candidate_count"] = int(state.get("candidate_count", 0)) + 1
+        else:
+            state["candidate"] = object_type
+            state["candidate_count"] = 1
+
+        if int(state["candidate_count"]) >= required:
+            state["stable"] = object_type
+            state["candidate"] = None
+            state["candidate_count"] = 0
+            return object_type
+        return stable
+
+    def infer_and_track(self, frame: np.ndarray, frame_idx: int) -> List[Detection]:
+        global_detections, non_ball_detections, global_ball_candidates = self._run_global_tracking_pass(
+            frame, frame_idx
+        )
+        ball_only_candidates = self._run_ball_only_detection(frame, frame_idx, global_ball_candidates)
+
+        fused_candidates = [*global_ball_candidates, *ball_only_candidates]
+        fused_ball: Optional[Detection] = None
+        fused_status = "missing"
+        selected_from_ball_only = False
+        if fused_candidates:
+            fused_ball = self._select_best_ball_candidate(fused_candidates, frame_idx)
+            selected_from_ball_only = fused_ball in ball_only_candidates
+            if selected_from_ball_only and global_ball_candidates:
+                fused_status = "fused_ball_only"
+            elif selected_from_ball_only:
+                fused_status = "recovered_ball_only"
+            else:
+                fused_status = "active"
+
+        detections = list(non_ball_detections)
+        if fused_ball is not None:
+            final_ball = Detection(
+                bbox=fused_ball.bbox,
+                class_id=fused_ball.class_id,
+                model_class=fused_ball.model_class,
+                object_type="ball",
+                score=fused_ball.score,
+                track_id=self.canonical_ball_track_id,
+            )
+            detections.append(final_ball)
             self.tracks.setdefault("ball", {}).setdefault(frame_idx, {})[self.canonical_ball_track_id] = {
-                "bbox": best_ball.bbox,
-                "score": best_ball.score,
-                "class_id": best_ball.class_id,
-                "model_class": best_ball.model_class,
-                "class_name": best_ball.class_name,
-                "object_type": best_ball.object_type,
-                "raw_track_id": best_ball.track_id,
-                "status": "active",
+                "bbox": final_ball.bbox,
+                "score": final_ball.score,
+                "class_id": final_ball.class_id,
+                "model_class": final_ball.model_class,
+                "class_name": final_ball.class_name,
+                "object_type": final_ball.object_type,
+                "raw_track_id": fused_ball.track_id,
+                "status": fused_status,
                 "interpolated": False,
             }
             self.ball_missed_frames = 0
-            self._update_ball_history(frame_idx, best_ball, status="active")
+            self._update_ball_history(frame_idx, final_ball, status=fused_status)
         else:
             self.ball_missed_frames += 1
-            if self._should_attempt_ball_recovery():
-                recovered_ball = self._attempt_ball_roi_recovery(frame, frame_idx)
-                if recovered_ball is not None:
-                    detections.append(recovered_ball)
-                    self.tracks.setdefault("ball", {}).setdefault(frame_idx, {})[
-                        self.canonical_ball_track_id
-                    ] = {
-                        "bbox": recovered_ball.bbox,
-                        "score": recovered_ball.score,
-                        "class_id": recovered_ball.class_id,
-                        "model_class": recovered_ball.model_class,
-                        "class_name": recovered_ball.class_name,
-                        "object_type": recovered_ball.object_type,
-                        "raw_track_id": recovered_ball.track_id,
-                        "status": "recovered_roi",
-                        "interpolated": False,
-                    }
-                    self.ball_missed_frames = 0
-                    self._update_ball_history(frame_idx, recovered_ball, status="recovered_roi")
 
+        self.last_frame_debug = {
+            "frame_idx": int(frame_idx),
+            "global_counts": self._count_detections_by_type(global_detections),
+            "fused_counts": self._count_detections_by_type(detections),
+            "ball_candidates_global": len(global_ball_candidates),
+            "ball_candidates_ball_only": len(ball_only_candidates),
+            "ball_source": (
+                "ball_only"
+                if selected_from_ball_only and fused_ball is not None
+                else "global"
+                if fused_ball is not None
+                else "none"
+            ),
+        }
         return detections
