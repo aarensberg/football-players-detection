@@ -86,7 +86,7 @@ Team identity is inferred from jersey-colour descriptors extracted from player c
 The ball is the hardest class to detect consistently. Short gaps are filled with linear interpolation, and a ball-specific ROI recovery pass revisits the last known region when the ball is missed by the global detector. This improves coverage without changing the detector weights.
 
 \subsection{Camera Motion and Perspective}
-Camera motion compensation can be estimated with optical flow on static regions of the pitch. In a more complete version of the pipeline, these corrections can be combined with a perspective transform to convert image coordinates into approximate field coordinates.
+Camera motion compensation is estimated with optical flow on static regions of the pitch and applied as a frame-to-frame translation correction. These stabilized coordinates are then combined with an approximate perspective transform to convert image positions into field-space distances.
 
 \subsection{Metrics}
 The experiment framework stores per-frame and aggregated metrics. The main metrics are: frames with detection per class, average detections per frame, total tracks, average and maximum track length, ball observed versus interpolated frames, maximum interpolation gap, team switch counts, and ball coverage percentage.
@@ -164,19 +164,20 @@ finetuned\_no\_team & 91.7\% & 617 & 71 & N/A \\
 \subsection{Qualitative Results}
 \begin{figure}[H]
 \centering
-\includegraphics[width=\textwidth]{baseline-screenshot.png}
+\placeholderfigure{Insert baseline qualitative output from the current pipeline run}
+\caption{Baseline output placeholder.}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\includegraphics[width=\textwidth]{finetuned_full-screenshot.png}
+\placeholderfigure{Insert fine-tuned full pipeline output from the current pipeline run}
 \caption{Fine-tuned full pipeline output example.}
 \end{figure}
 
 \section{Discussion}
 The gap between the baseline and the fine-tuned model is consistent with the expectations of deep representation learning. The domain-specific model learns football-specific features such as jersey patterns, pitch context, and the visual appearance of the ball under broadcast conditions.
 
-Ball interpolation is a useful temporal prior: it does not invent new information, but it smooths short occlusion gaps and makes the final trajectory more complete. In contrast, camera motion compensation and team assignment primarily affect the interpretability and coherence of the analysis outputs rather than the raw ball coverage.
+Ball interpolation is a useful temporal prior: it does not invent new information, but it smooths short occlusion gaps and makes the final trajectory more complete. Camera motion compensation mainly improves geometric consistency, while team assignment and possession tracking make the downstream match statistics easier to interpret.
 
 Typical failure modes include the ball being airborne, extreme motion blur, partial occlusions near clusters of players, and visually ambiguous goalkeepers. These errors are tied to object scale, appearance variability, and the limitations of a frame-based detector.
 

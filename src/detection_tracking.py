@@ -66,6 +66,8 @@ class DetectionTracker:
         }
         self.player_goalkeeper_state: Dict[int, Dict[str, object]] = {}
         self.last_frame_debug: Dict[str, object] = {}
+        self.frame_geometry: Dict[int, Dict[str, object]] = {}
+        self.possession_summary: Dict[str, object] = {}
         if self.using_fallback_model:
             print(
                 "[INFO] Using generic YOLO model yolov8n.pt; "
@@ -128,7 +130,9 @@ class DetectionTracker:
 
     @staticmethod
     def _bbox_center_xy(bbox: np.ndarray) -> np.ndarray:
-        return np.array([(bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0], dtype=float)
+        return np.array(
+            [(bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0], dtype=float
+        )
 
     @staticmethod
     def _bbox_iou(bbox_a: np.ndarray, bbox_b: np.ndarray) -> float:
@@ -172,7 +176,10 @@ class DetectionTracker:
                 return False
             return True
 
-        if self.config.min_bbox_area_px is not None and area_px < self.config.min_bbox_area_px:
+        if (
+            self.config.min_bbox_area_px is not None
+            and area_px < self.config.min_bbox_area_px
+        ):
             return False
         if (
             object_type in {"player", "goalkeeper"}
@@ -191,12 +198,17 @@ class DetectionTracker:
             prev = self.ball_history[-2]
             dt = int(last["frame_idx"]) - int(prev["frame_idx"])
             if dt > 0:
-                velocity = (np.array(last["center"], dtype=float) - np.array(prev["center"], dtype=float)) / float(dt)
+                velocity = (
+                    np.array(last["center"], dtype=float)
+                    - np.array(prev["center"], dtype=float)
+                ) / float(dt)
                 ahead = max(0, current_frame_idx - int(last["frame_idx"]))
                 predicted = predicted + velocity * float(ahead)
         return predicted
 
-    def _update_ball_history(self, frame_idx: int, detection: Detection, status: str) -> None:
+    def _update_ball_history(
+        self, frame_idx: int, detection: Detection, status: str
+    ) -> None:
         bbox = np.array(detection.bbox, dtype=float)
         self.ball_history.append(
             {
@@ -266,7 +278,10 @@ class DetectionTracker:
             conf=self.config.ball_roi_conf_threshold,
             iou=self.config.ball_iou_threshold,
             imgsz=int(
-                np.ceil(max(64, min(self.config.imgsz, max(roi.shape[0], roi.shape[1]))) / 32.0)
+                np.ceil(
+                    max(64, min(self.config.imgsz, max(roi.shape[0], roi.shape[1])))
+                    / 32.0
+                )
                 * 32
             ),
             device=self.config.device,
@@ -289,7 +304,13 @@ class DetectionTracker:
         best_metric = float("-inf")
         for roi_bbox, class_id, score in zip(xyxy, cls_ids, scores):
             full_bbox = np.array(
-                [roi_bbox[0] + x1, roi_bbox[1] + y1, roi_bbox[2] + x1, roi_bbox[3] + y1], dtype=float
+                [
+                    roi_bbox[0] + x1,
+                    roi_bbox[1] + y1,
+                    roi_bbox[2] + x1,
+                    roi_bbox[3] + y1,
+                ],
+                dtype=float,
             )
             if isinstance(names, dict):
                 model_class = str(names.get(int(class_id), str(class_id)))
@@ -323,7 +344,9 @@ class DetectionTracker:
             )
         return best_det
 
-    def _select_best_ball_candidate(self, candidates: List[Detection], frame_idx: int) -> Detection:
+    def _select_best_ball_candidate(
+        self, candidates: List[Detection], frame_idx: int
+    ) -> Detection:
         if len(candidates) == 1:
             return candidates[0]
 
@@ -332,7 +355,10 @@ class DetectionTracker:
         iou_thr = self.config.ball_iou_threshold
         for cand in sorted_candidates:
             cand_bbox = np.array(cand.bbox, dtype=float)
-            if any(self._bbox_iou(cand_bbox, np.array(k.bbox, dtype=float)) > iou_thr for k in filtered):
+            if any(
+                self._bbox_iou(cand_bbox, np.array(k.bbox, dtype=float)) > iou_thr
+                for k in filtered
+            ):
                 continue
             filtered.append(cand)
         if not filtered:
@@ -345,7 +371,12 @@ class DetectionTracker:
         best_det = filtered[0]
         best_metric = float("-inf")
         for cand in filtered:
-            dist = float(np.linalg.norm(self._bbox_center_xy(np.array(cand.bbox, dtype=float)) - predicted_center))
+            dist = float(
+                np.linalg.norm(
+                    self._bbox_center_xy(np.array(cand.bbox, dtype=float))
+                    - predicted_center
+                )
+            )
             metric = float(cand.score) - 0.0015 * dist
             if metric > best_metric:
                 best_metric = metric
@@ -434,7 +465,9 @@ class DetectionTracker:
             non_ball_detections.append(det)
             bucket = self._track_bucket(object_type)
             if bucket and det.track_id >= 0:
-                self.tracks.setdefault(bucket, {}).setdefault(frame_idx, {})[det.track_id] = {
+                self.tracks.setdefault(bucket, {}).setdefault(frame_idx, {})[
+                    det.track_id
+                ] = {
                     "bbox": det.bbox,
                     "score": det.score,
                     "class_id": det.class_id,
@@ -509,8 +542,12 @@ class DetectionTracker:
         predicted_center: Optional[np.ndarray] = None
         reference_bbox: Optional[np.ndarray] = None
         if global_ball_candidates:
-            best_global = self._select_best_ball_candidate(global_ball_candidates, frame_idx)
-            predicted_center = self._bbox_center_xy(np.array(best_global.bbox, dtype=float))
+            best_global = self._select_best_ball_candidate(
+                global_ball_candidates, frame_idx
+            )
+            predicted_center = self._bbox_center_xy(
+                np.array(best_global.bbox, dtype=float)
+            )
             reference_bbox = np.array(best_global.bbox, dtype=float)
         else:
             predicted_center = self._predict_ball_center(frame_idx)
@@ -518,7 +555,8 @@ class DetectionTracker:
                 reference_bbox = np.array(self.ball_history[-1]["bbox"], dtype=float)
 
         if predicted_center is not None and (
-            self.ball_missed_frames <= self.config.ball_roi_max_missed_frames or global_ball_candidates
+            self.ball_missed_frames <= self.config.ball_roi_max_missed_frames
+            or global_ball_candidates
         ):
             roi_candidate = self._attempt_ball_roi_recovery(
                 frame,
@@ -559,10 +597,12 @@ class DetectionTracker:
         return stable
 
     def infer_and_track(self, frame: np.ndarray, frame_idx: int) -> List[Detection]:
-        global_detections, non_ball_detections, global_ball_candidates = self._run_global_tracking_pass(
-            frame, frame_idx
+        global_detections, non_ball_detections, global_ball_candidates = (
+            self._run_global_tracking_pass(frame, frame_idx)
         )
-        ball_only_candidates = self._run_ball_only_detection(frame, frame_idx, global_ball_candidates)
+        ball_only_candidates = self._run_ball_only_detection(
+            frame, frame_idx, global_ball_candidates
+        )
 
         fused_candidates = [*global_ball_candidates, *ball_only_candidates]
         fused_ball: Optional[Detection] = None
@@ -589,7 +629,9 @@ class DetectionTracker:
                 track_id=self.canonical_ball_track_id,
             )
             detections.append(final_ball)
-            self.tracks.setdefault("ball", {}).setdefault(frame_idx, {})[self.canonical_ball_track_id] = {
+            self.tracks.setdefault("ball", {}).setdefault(frame_idx, {})[
+                self.canonical_ball_track_id
+            ] = {
                 "bbox": final_ball.bbox,
                 "score": final_ball.score,
                 "class_id": final_ball.class_id,
@@ -614,9 +656,7 @@ class DetectionTracker:
             "ball_source": (
                 "ball_only"
                 if selected_from_ball_only and fused_ball is not None
-                else "global"
-                if fused_ball is not None
-                else "none"
+                else "global" if fused_ball is not None else "none"
             ),
         }
         return detections

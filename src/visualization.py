@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -8,7 +8,11 @@ import numpy as np
 from src.detection_tracking import Detection
 
 
-def draw_detections(frame: np.ndarray, detections: List[Detection]) -> np.ndarray:
+def draw_detections(
+    frame: np.ndarray,
+    detections: List[Detection],
+    frame_state: Optional[Dict[str, Any]] = None,
+) -> np.ndarray:
     rendered = frame.copy()
     h, w = rendered.shape[:2]
 
@@ -32,13 +36,23 @@ def draw_detections(frame: np.ndarray, detections: List[Detection]) -> np.ndarra
         elif obj_type == "referee":
             referee_color = (160, 160, 160)
             _draw_player_marker(
-                rendered, x1, y1, x2, y2, referee_color, box_thickness=2, ellipse_fill=False
+                rendered,
+                x1,
+                y1,
+                x2,
+                y2,
+                referee_color,
+                box_thickness=2,
+                ellipse_fill=False,
             )
         else:
             _draw_player_marker(rendered, x1, y1, x2, y2, base_color, box_thickness=2)
 
         label = _build_label(det)
         _draw_label(rendered, label, x1, y1, base_color)
+
+    if frame_state:
+        _draw_hud(rendered, frame_state)
     return rendered
 
 
@@ -55,7 +69,9 @@ def _color_for_label(label: str) -> tuple[int, int, int]:
     return (255, 255, 255)
 
 
-def _clip_bbox(bbox: List[float], frame_w: int, frame_h: int) -> Tuple[int, int, int, int]:
+def _clip_bbox(
+    bbox: List[float], frame_w: int, frame_h: int
+) -> Tuple[int, int, int, int]:
     x1, y1, x2, y2 = [int(v) for v in bbox]
     x1 = max(0, min(frame_w - 1, x1))
     y1 = max(0, min(frame_h - 1, y1))
@@ -87,7 +103,9 @@ def _draw_player_marker(
     ry = max(4, (y2 - y1) // 8)
     cv2.ellipse(frame, (cx, cy), (rx, ry), 0, 0, 360, color, 2)
     if ellipse_fill:
-        cv2.ellipse(frame, (cx, cy), (max(2, rx - 2), max(1, ry - 2)), 0, 0, 360, color, -1)
+        cv2.ellipse(
+            frame, (cx, cy), (max(2, rx - 2), max(1, ry - 2)), 0, 0, 360, color, -1
+        )
 
 
 def _draw_corner_marks(
@@ -148,3 +166,33 @@ def _draw_label(
         thickness,
         cv2.LINE_AA,
     )
+
+
+def _draw_hud(frame: np.ndarray, frame_state: Dict[str, Any]) -> None:
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (8, 8), (430, 118), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.38, frame, 0.62, 0, frame)
+
+    motion = frame_state.get("camera_motion") or {}
+    possession = frame_state.get("possession") or {}
+    offset = frame_state.get("camera_offset_px") or (0.0, 0.0)
+    transform = frame_state.get("pitch_transform") or {}
+
+    lines = [
+        f"Camera dx/dy: {motion.get('dx_px', 0.0):.1f}, {motion.get('dy_px', 0.0):.1f} px",
+        f"Camera offset: {offset[0]:.1f}, {offset[1]:.1f} px",
+        f"Possession: team {possession.get('team_id', 'N/A')} | track {possession.get('player_track_id', 'N/A')}",
+        f"Field mode: {transform.get('mode', 'n/a')} | {transform.get('field_length_m', 0.0):.0f}x{transform.get('field_width_m', 0.0):.0f} m",
+    ]
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    for idx, line in enumerate(lines):
+        cv2.putText(
+            frame,
+            line,
+            (18, 34 + idx * 22),
+            font,
+            0.48,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )

@@ -42,6 +42,15 @@ class PipelineConfig:
     enable_ball_interpolation: bool
     enable_team_assignment: bool
     meters_per_pixel: Optional[float]
+    camera_motion_top_ratio: float
+    camera_motion_bottom_ratio: float
+    camera_motion_side_margin_ratio: float
+    camera_motion_min_points: int
+    pitch_transform_mode: str
+    field_length_m: float
+    field_width_m: float
+    possession_max_distance_px: float
+    possession_max_distance_m: float
 
 
 def parse_args() -> PipelineConfig:
@@ -243,6 +252,61 @@ def parse_args() -> PipelineConfig:
         default=None,
         help="Optional approximate meters per pixel scale for metric speeds.",
     )
+    parser.add_argument(
+        "--camera-motion-top-ratio",
+        type=float,
+        default=0.22,
+        help="Top pitch band ratio used for optical-flow camera estimation.",
+    )
+    parser.add_argument(
+        "--camera-motion-bottom-ratio",
+        type=float,
+        default=0.82,
+        help="Bottom pitch band ratio used for optical-flow camera estimation.",
+    )
+    parser.add_argument(
+        "--camera-motion-side-margin-ratio",
+        type=float,
+        default=0.08,
+        help="Side margin ratio used to ignore edges in camera estimation.",
+    )
+    parser.add_argument(
+        "--camera-motion-min-points",
+        type=int,
+        default=12,
+        help="Minimum matched points needed to trust camera motion.",
+    )
+    parser.add_argument(
+        "--pitch-transform-mode",
+        type=str,
+        choices=["scaled", "identity"],
+        default="scaled",
+        help="Mode used for point-to-field coordinate conversion.",
+    )
+    parser.add_argument(
+        "--field-length-m",
+        type=float,
+        default=105.0,
+        help="Approximate football pitch length in meters.",
+    )
+    parser.add_argument(
+        "--field-width-m",
+        type=float,
+        default=68.0,
+        help="Approximate football pitch width in meters.",
+    )
+    parser.add_argument(
+        "--possession-max-distance-px",
+        type=float,
+        default=48.0,
+        help="Maximum pixel distance to assign ball possession when using image space.",
+    )
+    parser.add_argument(
+        "--possession-max-distance-m",
+        type=float,
+        default=2.8,
+        help="Maximum field distance to assign ball possession when using field coordinates.",
+    )
 
     args = parser.parse_args()
 
@@ -332,4 +396,19 @@ def parse_args() -> PipelineConfig:
         meters_per_pixel=(
             None if args.meters_per_pixel is None else float(args.meters_per_pixel)
         ),
+        camera_motion_top_ratio=max(
+            0.0, min(0.45, float(args.camera_motion_top_ratio))
+        ),
+        camera_motion_bottom_ratio=max(
+            0.55, min(1.0, float(args.camera_motion_bottom_ratio))
+        ),
+        camera_motion_side_margin_ratio=max(
+            0.0, min(0.45, float(args.camera_motion_side_margin_ratio))
+        ),
+        camera_motion_min_points=max(1, int(args.camera_motion_min_points)),
+        pitch_transform_mode=str(args.pitch_transform_mode),
+        field_length_m=max(1.0, float(args.field_length_m)),
+        field_width_m=max(1.0, float(args.field_width_m)),
+        possession_max_distance_px=max(1.0, float(args.possession_max_distance_px)),
+        possession_max_distance_m=max(0.25, float(args.possession_max_distance_m)),
     )
