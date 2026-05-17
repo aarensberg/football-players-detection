@@ -20,7 +20,7 @@ def draw_detections(frame: np.ndarray, detections: List[Detection]) -> np.ndarra
         obj_type = det.object_type.lower()
         base_color = (
             _normalize_color(det.team_color)
-            if obj_type == "player" and det.team_color is not None
+            if obj_type in {"player", "goalkeeper"} and det.team_color is not None
             else _color_for_label(obj_type)
         )
 
@@ -118,6 +118,8 @@ def _build_label(det: Detection) -> str:
     parts = [det.object_type, f"id={det.track_id}"]
     if det.team_id is not None:
         parts.append(f"team={det.team_id}")
+    if det.model_class.lower() != det.object_type.lower():
+        parts.append(f"raw={det.model_class}")
     parts.append(f"conf={det.score:.2f}")
     return " ".join(parts)
 

@@ -16,7 +16,19 @@ from ultralytics import YOLO
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train YOLOv8 on football player detection data")
+    parser = argparse.ArgumentParser(
+        description="Train YOLOv8 on football player detection data",
+        epilog=(
+            "Manual ball-improvement recommendations for a future GPU VM run:\n"
+            "  1) Increase --imgsz (e.g. 1280) to improve small-ball recall.\n"
+            "  2) Use stronger augmentation for small/fast objects (motion blur, scale jitter, "
+            "mosaic/mixup tuning).\n"
+            "  3) Consider class-focus strategies (oversample ball-heavy clips, "
+            "class-aware sampling/weights) to reduce ball misses.\n"
+            "This script remains manual by design; it is never auto-triggered by inference pipeline."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
     parser.add_argument("--model", type=str, default="yolov8n.pt", help="Base YOLOv8 model or weights")
     parser.add_argument(
         "--data",

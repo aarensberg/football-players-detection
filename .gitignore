@@ -8,3 +8,5 @@ football-players-detection.v1i.yolov8/
 yolov8n.pt
 runs/
 models/
+
+output/*.mp4

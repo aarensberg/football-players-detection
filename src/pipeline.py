@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.ball_interpolation import BallInterpolator
 from src.config import PipelineConfig
 from src.detection_tracking import DetectionTracker
 from src.team_assignment import TeamAssigner
@@ -25,6 +26,7 @@ def run_pipeline(config: PipelineConfig) -> Path:
     )
     writer = VideoWriter(output_path, reader.meta)
     team_assigner = TeamAssigner()
+    ball_interpolator = BallInterpolator(max_gap_frames=config.ball_interpolation_max_gap)
 
     processed_count = 0
     try:
@@ -37,6 +39,9 @@ def run_pipeline(config: PipelineConfig) -> Path:
                 continue
 
             detections = detector.infer_and_track(frame, frame_idx)
+            ball_interpolator.record_frame_tracks(
+                frame_idx, detector.tracks.get("ball", {}).get(frame_idx, {})
+            )
             team_assigner.assign(frame, detections)
             for det in detections:
                 if det.object_type not in {"player", "goalkeeper"}:
@@ -60,6 +65,14 @@ def run_pipeline(config: PipelineConfig) -> Path:
         reader.release()
         writer.release()
 
+    interpolation_stats = ball_interpolator.interpolate_tracks(detector.tracks)
+    print(
+        "Ball interpolation summary - "
+        f"observed_frames={interpolation_stats.observed_frames}, "
+        f"interpolated_frames={interpolation_stats.interpolated_frames}, "
+        f"max_gap={config.ball_interpolation_max_gap}"
+    )
+
     print(f"Tracking keys: {list(detector.tracks.keys())}")
     for bucket, frames in detector.tracks.items():
         tracked_objects = sum(len(frame_tracks) for frame_tracks in frames.values())
@@ -76,4 +89,6 @@ def run_pipeline(config: PipelineConfig) -> Path:
         f"track_counts: team1={t_counts[1]}, team2={t_counts[2]}, "
         f"assignment_events={team_summary['assignment_events']}"
     )
+    for warning in team_summary.get("warnings", []):
+        print(warning)
     return writer.output_path

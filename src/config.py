@@ -17,6 +17,13 @@ class PipelineConfig:
     conf_threshold: float
     iou_threshold: float
     ball_conf_threshold: Optional[float]
+    ball_min_bbox_area_px: Optional[float]
+    ball_max_bbox_area_px: Optional[float]
+    ball_min_bbox_area_ratio: Optional[float]
+    ball_max_bbox_area_ratio: Optional[float]
+    min_bbox_area_px: Optional[float]
+    goalkeeper_switch_frames: int
+    ball_interpolation_max_gap: int
     imgsz: int
     device: str
     detector_weights_mode: str
@@ -59,8 +66,50 @@ def parse_args() -> PipelineConfig:
     parser.add_argument(
         "--ball-conf",
         type=float,
+        default=0.12,
+        help="Ball-only confidence threshold (more permissive than --conf by default).",
+    )
+    parser.add_argument(
+        "--ball-min-area-px",
+        type=float,
+        default=6.0,
+        help="Minimum ball bbox area in pixels (post-filter).",
+    )
+    parser.add_argument(
+        "--ball-max-area-px",
+        type=float,
         default=None,
-        help="Optional ball-only confidence threshold (post-filter). If omitted, --conf is used.",
+        help="Optional maximum ball bbox area in pixels (post-filter).",
+    )
+    parser.add_argument(
+        "--ball-min-area-ratio",
+        type=float,
+        default=None,
+        help="Optional minimum ball bbox area ratio vs frame area (0..1).",
+    )
+    parser.add_argument(
+        "--ball-max-area-ratio",
+        type=float,
+        default=0.0035,
+        help="Maximum ball bbox area ratio vs frame area (0..1).",
+    )
+    parser.add_argument(
+        "--min-area-px",
+        type=float,
+        default=36.0,
+        help="General minimum bbox area in pixels for non-ball objects.",
+    )
+    parser.add_argument(
+        "--goalkeeper-switch-frames",
+        type=int,
+        default=3,
+        help="Consecutive frames required before player/goalkeeper class switch is accepted.",
+    )
+    parser.add_argument(
+        "--ball-interp-max-gap",
+        type=int,
+        default=4,
+        help="Max missing-frame gap for linear ball track interpolation.",
     )
     parser.add_argument("--iou", type=float, default=0.5, help="NMS IoU threshold")
     parser.add_argument(
@@ -132,6 +181,27 @@ def parse_args() -> PipelineConfig:
         ball_conf_threshold=(
             None if args.ball_conf is None else max(0.0, min(1.0, args.ball_conf))
         ),
+        ball_min_bbox_area_px=(
+            None if args.ball_min_area_px is None else max(0.0, float(args.ball_min_area_px))
+        ),
+        ball_max_bbox_area_px=(
+            None if args.ball_max_area_px is None else max(0.0, float(args.ball_max_area_px))
+        ),
+        ball_min_bbox_area_ratio=(
+            None
+            if args.ball_min_area_ratio is None
+            else max(0.0, min(1.0, float(args.ball_min_area_ratio)))
+        ),
+        ball_max_bbox_area_ratio=(
+            None
+            if args.ball_max_area_ratio is None
+            else max(0.0, min(1.0, float(args.ball_max_area_ratio)))
+        ),
+        min_bbox_area_px=(
+            None if args.min_area_px is None else max(0.0, float(args.min_area_px))
+        ),
+        goalkeeper_switch_frames=max(1, int(args.goalkeeper_switch_frames)),
+        ball_interpolation_max_gap=max(0, int(args.ball_interp_max_gap)),
         imgsz=max(64, int(args.imgsz)),
         device=args.device,
         detector_weights_mode=detector_weights_mode,
