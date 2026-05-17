@@ -26,7 +26,11 @@ def run_pipeline(config: PipelineConfig) -> Path:
     )
     writer = VideoWriter(output_path, reader.meta)
     team_assigner = TeamAssigner()
-    ball_interpolator = BallInterpolator(max_gap_frames=config.ball_interpolation_max_gap)
+    ball_interpolator = BallInterpolator(
+        max_gap_frames=config.ball_interpolation_max_gap,
+        max_center_speed_px_per_frame=config.ball_interpolation_max_center_speed_px_per_frame,
+        max_endpoint_area_change_ratio=config.ball_interpolation_max_endpoint_area_change_ratio,
+    )
 
     processed_count = 0
     try:

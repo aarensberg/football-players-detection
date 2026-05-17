@@ -25,6 +25,9 @@ def parse_args() -> argparse.Namespace:
             "mosaic/mixup tuning).\n"
             "  3) Consider class-focus strategies (oversample ball-heavy clips, "
             "class-aware sampling/weights) to reduce ball misses.\n"
+            "  Example manual run (do NOT run in inference smoke tests):\n"
+            "    python scripts/train_football_detector.py --model yolov8s.pt "
+            "--imgsz 1280 --epochs 80 --batch 12 --device 0\n"
             "This script remains manual by design; it is never auto-triggered by inference pipeline."
         ),
         formatter_class=argparse.RawTextHelpFormatter,
