@@ -1,0 +1,188 @@
+\documentclass[aspectratio=169]{beamer}
+
+\usetheme{Madrid}
+\usecolortheme{default}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage{hyperref}
+
+\title[Football Analysis]{Deep Learning for Football Match Analysis with YOLOv8 and Multi-Object Tracking}
+\author{Your Name}
+\institute{Albert School \textbar{} Applied Project}
+\date{\today}
+
+\newcommand{\placeholderfigure}[1]{%
+  \fbox{\parbox[c][3.2cm][c]{0.96\linewidth}{\centering \textit{#1}}}%
+}
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{Outline}
+  \tableofcontents
+\end{frame}
+
+\section{Motivation}
+\begin{frame}{Motivation}
+  \begin{itemize}
+    \item Football broadcast analysis is useful for coaching, scouting, and match review.
+    \item The challenge is to robustly detect small objects, maintain identities, and derive usable statistics.
+    \item This project uses a deep detector plus temporal post-processing to turn video into match metrics.
+  \end{itemize}
+\end{frame}
+
+\section{Pipeline}
+\begin{frame}{Approach Overview}
+  \centering
+  \placeholderfigure{TODO: insert a pipeline diagram: YOLOv8 $\rightarrow$ tracking $\rightarrow$ team assignment $\rightarrow$ ball interpolation $\rightarrow$ metrics}
+\end{frame}
+
+\begin{frame}{Method Summary}
+  \begin{itemize}
+    \item Detection: fine-tuned YOLOv8 for ball, player, goalkeeper, referee.
+    \item Tracking: ByteTrack-style persistent IDs.
+    \item Team assignment: jersey colour clustering on player crops.
+    \item Ball recovery: interpolation + ROI-based recovery for short gaps.
+    \item Camera motion: optical-flow-based compensation when enabled.
+  \end{itemize}
+\end{frame}
+
+\section{Data and Experiments}
+\begin{frame}{Dataset and Classes}
+  \begin{itemize}
+    \item Broadcast football video with YOLO annotations.
+    \item Classes: ball, player, goalkeeper, referee.
+    \item Strong class imbalance: the ball is small and sparse, while players dominate the frames.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Experimental Variants}
+  \begin{table}
+  \centering
+  \small
+  \begin{tabular}{llcccc}
+    \toprule
+    Variant & Weights & Cam. & Interp. & Team & ROI \\
+    \midrule
+    baseline & generic & off & off & off & off \\
+    finetuned\_full & fine-tuned & on & on & on & on \\
+    finetuned\_no\_interp & fine-tuned & on & off & on & on \\
+    finetuned\_no\_cam & fine-tuned & off & on & on & on \\
+    finetuned\_no\_team & fine-tuned & on & on & off & on \\
+    \bottomrule
+  \end{tabular}
+  \end{table}
+\end{frame}
+
+\section{Results}
+\begin{frame}{Baseline vs Fine-Tuned Full}
+  \begin{table}
+  \centering
+  \small
+  \begin{tabular}{lrrrr}
+    \toprule
+    Variant & Ball coverage & Player tracks & Avg track len & Referee frames \\
+    \midrule
+    baseline & 43.6\% & 175 & 101.9 & 0 \\
+    finetuned\_full & 91.7\% & 50 & 305.7 & 750 \\
+    \bottomrule
+  \end{tabular}
+  \end{table}
+\end{frame}
+
+\begin{frame}{Key Takeaways}
+  \begin{itemize}
+    \item Ball coverage increases from 43.6\% to 91.7\%.
+    \item Player tracks drop from 175 to 50, which means much less fragmentation.
+    \item Average player track length rises from 101.9 to 305.7 frames.
+    \item Referees are detected consistently in the fine-tuned pipeline.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Ablation: Ball Interpolation}
+  \begin{table}
+  \centering
+  \small
+  \begin{tabular}{lrrr}
+    \toprule
+    Variant & Ball coverage & Observed & Interpolated \\
+    \midrule
+    finetuned\_full & 91.7\% & 617 & 71 \\
+    finetuned\_no\_interp & 82.3\% & 617 & 0 \\
+    \bottomrule
+  \end{tabular}
+  \end{table}
+  \vspace{0.3cm}
+  \begin{itemize}
+    \item Interpolation contributes 71 extra ball frames.
+    \item This is the clearest ablation effect in the study.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Ablation: Camera Motion and Team Assignment}
+  \begin{table}
+  \centering
+  \small
+  \begin{tabular}{lrr}
+    \toprule
+    Variant & Ball coverage & Avg team switches \\
+    \midrule
+    finetuned\_full & 91.7\% & 0.34 \\
+    finetuned\_no\_cam & 91.7\% & 0.30 \\
+    finetuned\_no\_team & 91.7\% & N/A \\
+    \bottomrule
+  \end{tabular}
+  \end{table}
+\end{frame}
+
+\section{Qualitative Results}
+\begin{frame}{Annotated Output: Baseline}
+  \centering
+  \placeholderfigure{TODO: insert screenshot from baseline output video}
+\end{frame}
+
+\begin{frame}{Annotated Output: Fine-Tuned Full}
+  \centering
+  \placeholderfigure{TODO: insert screenshot from fine-tuned full output video}
+\end{frame}
+
+\section{Discussion}
+\begin{frame}{Discussion and Error Cases}
+  \begin{itemize}
+    \item The fine-tuned model learns football-specific visual cues and improves small-object recall.
+    \item Interpolation acts as a temporal prior and fills short ball gaps.
+    \item Remaining failure cases: airborne ball, motion blur, strong occlusions, goalkeeper ambiguity.
+    \item Camera compensation and team assignment mainly improve downstream analysis coherence.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Limitations and Future Work}
+  \begin{itemize}
+    \item Single broadcast viewpoint and limited number of videos.
+    \item Ball speed metrics depend on calibration and metric scale.
+    \item Future work: better small-object detector, temporal model, pitch calibration, multi-view analysis.
+  \end{itemize}
+\end{frame}
+
+\section{Conclusion}
+\begin{frame}{Conclusion}
+  \begin{itemize}
+    \item The fine-tuned YOLOv8 pipeline substantially outperforms the generic baseline.
+    \item Temporal post-processing improves ball coverage and track continuity.
+    \item The framework is now ready for report figures, ablations, and qualitative screenshots.
+  \end{itemize}
+\end{frame}
+
+\begin{frame}{Thank You}
+  \centering
+  Questions?
+\end{frame}
+
+\end{document}
