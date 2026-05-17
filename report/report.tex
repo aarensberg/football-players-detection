@@ -13,34 +13,23 @@
 \usepackage{hyperref}
 \usepackage{xcolor}
 
-\hypersetup{
-  colorlinks=true,
-  linkcolor=blue,
-  urlcolor=blue,
-  citecolor=blue
-}
-
 \newcommand{\placeholderfigure}[1]{%
   \fbox{\parbox[c][4.2cm][c]{0.92\linewidth}{\centering \textit{#1}}}%
 }
 
-\newcommand{\metric}[1]{\texttt{#1}}
+\newcommand{\metric}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\metriclines}[1]{\begin{tabular}[t]{@{}l@{}}#1\end{tabular}}
 
 \title{Deep Learning for Football Match Analysis with YOLOv8 and Multi-Object Tracking}
-\author{Your Name}
-\date{\today}
+\author{Alessandro ARENSBERG}
+\date{May 17, 2026}
 
 \begin{document}
 
 \maketitle
 
 \begin{abstract}
-This project builds an end-to-end football video analysis system from broadcast footage.
-The pipeline combines a fine-tuned YOLOv8 detector, persistent multi-object tracking,
-team assignment from jersey colour clustering, and ball interpolation / ROI recovery to
-improve ball coverage. Quantitatively, the fine-tuned full pipeline detects the ball in
-91.7\% of frames, compared with 43.6\% for a generic baseline, while also reducing player
-track fragmentation from 175 tracks to 50 and increasing average track length from 101.9 to
+This project builds an end-to-end football video analysis system from broadcast footage. The pipeline combines a fine-tuned YOLOv8 detector, persistent multi-object tracking, team assignment from jersey colour clustering, and ball interpolation / ROI recovery to improve ball coverage. Quantitatively, the fine-tuned full pipeline detects the ball in 91.7\% of frames, compared with 43.6\% for a generic baseline, while also reducing player track fragmentation from 175 tracks to 50 and increasing average track length from 101.9 to
 305.7 frames.
 \end{abstract}
 
@@ -48,87 +37,59 @@ track fragmentation from 175 tracks to 50 and increasing average track length fr
 \newpage
 
 \section{Introduction}
-Football broadcast analysis is a useful but challenging video understanding task. The scene
-contains small and fast-moving objects, frequent occlusions, camera motion, and visually similar
-players from opposing teams. The objective of this project is to estimate object locations and
-derive higher-level match statistics from a single match video.
+Football broadcast analysis is a useful but challenging video understanding task. The scene contains small and fast-moving objects, frequent occlusions, camera motion, and visually similar players from opposing teams. The objective of this project is to estimate object locations and derive higher-level match statistics from a single match video.
 
-The deep learning component of the project is based on representation learning for object
-detection: a YOLOv8 detector is fine-tuned on football-specific annotations for four classes
-(ball, player, goalkeeper, referee). The detector output is then consumed by a tracking and
-analysis pipeline that converts per-frame predictions into stable trajectories, team identities,
-and ball possession signals.
+The deep learning component of the project is based on representation learning for object detection: a YOLOv8 detector is fine-tuned on football-specific annotations for four classes (ball, player, goalkeeper, referee). The detector output is then consumed by a tracking and analysis pipeline that converts per-frame predictions into stable trajectories, team identities, and ball possession signals.
+
+This project was inspired by the public tutorial \textit{Build an AI/ML Football Analysis system with YOLO, OpenCV, and Python} on YouTube. That tutorial served as a starting point for the general pipeline idea and some implementation patterns. The student contribution in this work is the dataset-specific fine-tuning, the modular reimplementation, the experimental ablations, the metric extraction, the qualitative analysis, and the written report itself.
 
 \section{Related Work}
-Object detection and multi-object tracking are standard building blocks in modern sports analytics.
-YOLO-style detectors are widely used because they provide a good trade-off between accuracy and
-speed, while ByteTrack-style trackers help maintain stable identities across frames.
+Object detection and multi-object tracking are standard building blocks in modern sports analytics. YOLO-style detectors are widely used because they provide a good trade-off between accuracy and speed, while ByteTrack-style trackers help maintain stable identities across frames.
 
-In football, the most difficult targets are the ball and the referee, due to their small size,
-motion blur, and frequent occlusion. This project therefore focuses on a practical combination of
-deep detection, heuristics, and temporal smoothing rather than on a single monolithic model.
+In football, the most difficult targets are the ball and the referee, due to their small size, motion blur, and frequent occlusion. This project therefore focuses on a practical combination of deep detection, heuristics, and temporal smoothing rather than on a single monolithic model.
 
 \section{Dataset and Labelling}
-The dataset comes from a football broadcast video set with bounding-box annotations in YOLO format.
-The classes are \metric{ball}, \metric{player}, \metric{goalkeeper}, and \metric{referee}.
-Train/validation/test splits follow the dataset release.
+The dataset comes from a football broadcast video set with bounding-box annotations in YOLO format. The classes are \metric{ball}, \metric{player}, \metric{goalkeeper}, and \metric{referee}. Train/validation/test splits follow the dataset release.
 
 \begin{table}[H]
 \centering
-\caption{Dataset and annotation summary. Replace the TODO values with the exact split statistics if needed.}
+\caption{Dataset and annotation summary.}
 \begin{tabular}{lccc}
 \toprule
 Split & Images / frames & Labels & Notes \\
 \midrule
-Train & TODO & TODO & Main fine-tuning split \\
-Validation & TODO & TODO & Model selection \\
-Test & TODO & TODO & Held-out evaluation \\
+Train & 612 & 612 & Main fine-tuning split \\
+Validation & 38 & 38 & Model selection \\
+Test & 13 & 13 & Held-out evaluation \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The annotations use the standard YOLO box format. The dataset is dominated by player and referee
-instances, whereas the ball is comparatively sparse and much smaller in pixel size, which explains
-why the detector benefits strongly from fine-tuning and from ball-specific recovery logic.
+The annotations use the standard YOLO box format. The dataset is dominated by player and referee instances, whereas the ball is comparatively sparse and much smaller in pixel size, which explains why the detector benefits strongly from fine-tuning and from ball-specific recovery logic.
 
 \section{Methodology}
 
 \subsection{Detection with YOLOv8}
-The detector is based on YOLOv8 and was fine-tuned on the football dataset to predict the four
-target classes. Fine-tuning helps the model adapt to the broadcast viewpoint, the jersey patterns,
-and the small-object scale of the ball.
+The detector is based on YOLOv8 and was fine-tuned on the football dataset to predict the four target classes. Fine-tuning helps the model adapt to the broadcast viewpoint, the jersey patterns, and the small-object scale of the ball.
 
-Baseline configuration: generic pretrained YOLO weights, minimal post-processing, no team
-assignment, no interpolation, and no camera compensation.
+Baseline configuration: generic pretrained YOLO weights, minimal post-processing, no team assignment, no interpolation, and no camera compensation.
 
-Full configuration: fine-tuned football weights, tracking, ball interpolation, ball ROI recovery,
-and team assignment.
+Full configuration: fine-tuned football weights, tracking, ball interpolation, ball ROI recovery, and team assignment.
 
 \subsection{Tracking}
-Detection outputs are associated across frames using a ByteTrack-style tracker. Tracking converts
-per-frame detections into longer-lived identities and makes it possible to compute trajectory-based
-metrics such as track length and track stability.
+Detection outputs are associated across frames using a ByteTrack-style tracker. Tracking converts per-frame detections into longer-lived identities and makes it possible to compute trajectory-based metrics such as track length and track stability.
 
 \subsection{Team Assignment}
-Team identity is inferred from jersey-colour descriptors extracted from player crops. The approach
-clusters colour features and propagates a team label per track. This is not a learned classifier,
-but a lightweight visual inference module that sits on top of the detector/tracker output.
+Team identity is inferred from jersey-colour descriptors extracted from player crops. The approach clusters colour features and propagates a team label per track. This is not a learned classifier, but a lightweight visual inference module that sits on top of the detector/tracker output.
 
 \subsection{Ball Interpolation and ROI Recovery}
-The ball is the hardest class to detect consistently. Short gaps are filled with linear
-interpolation, and a ball-specific ROI recovery pass revisits the last known region when the ball is
-missed by the global detector. This improves coverage without changing the detector weights.
+The ball is the hardest class to detect consistently. Short gaps are filled with linear interpolation, and a ball-specific ROI recovery pass revisits the last known region when the ball is missed by the global detector. This improves coverage without changing the detector weights.
 
 \subsection{Camera Motion and Perspective}
-Camera motion compensation can be estimated with optical flow on static regions of the pitch. In a
-more complete version of the pipeline, these corrections can be combined with a perspective
-transform to convert image coordinates into approximate field coordinates.
+Camera motion compensation can be estimated with optical flow on static regions of the pitch. In a more complete version of the pipeline, these corrections can be combined with a perspective transform to convert image coordinates into approximate field coordinates.
 
 \subsection{Metrics}
-The experiment framework stores per-frame and aggregated metrics. The main metrics are:
-frames with detection per class, average detections per frame, total tracks, average and maximum
-track length, ball observed versus interpolated frames, maximum interpolation gap, team switch
-counts, and ball coverage percentage.
+The experiment framework stores per-frame and aggregated metrics. The main metrics are: frames with detection per class, average detections per frame, total tracks, average and maximum track length, ball observed versus interpolated frames, maximum interpolation gap, team switch counts, and ball coverage percentage.
 
 \begin{table}[H]
 \centering
@@ -137,10 +98,10 @@ counts, and ball coverage percentage.
 \toprule
 Metric group & Example columns \\
 \midrule
-Detection/tracking & \metric{frames_with_detection}, \metric{avg_detections_per_frame}, \metric{total_tracks}, \metric{avg_track_length_frames}, \metric{max_track_length_frames} \\
-Ball-specific & \metric{frames_with_ball_observed}, \metric{frames_with_ball_interpolated}, \metric{max_interp_gap} \\
-Team stability & \metric{avg_team_switches_per_track}, \metric{max_team_switches_per_track}, \metric{team_balance_*} \\
-Speed realism & \metric{player_max_speed_kmh}, \metric{player_unrealistic_speed_events} \\
+Detection/tracking & \metriclines{\metric{frames_with_detection} \\ \metric{avg_detections_per_frame} \\ \metric{total_tracks} \\ \metric{avg_track_length_frames} \\ \metric{max_track_length_frames}} \\
+Ball-specific & \metriclines{\metric{frames_with_ball_observed} \\ \metric{frames_with_ball_interpolated} \\ \metric{max_interp_gap}} \\
+Team stability & \metriclines{\metric{avg_team_switches_per_track} \\ \metric{max_team_switches_per_track} \\ \metric{team_balance_*}} \\
+Speed realism & \metriclines{\metric{player_max_speed_kmh} \\ \metric{player_unrealistic_speed_events}} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -167,12 +128,11 @@ finetuned\_no\_team & fine-tuned football & on & on & off & on \\
 \section{Results}
 
 \subsection{Main Comparison}
-The fine-tuned pipeline significantly outperforms the baseline on ball coverage and tracking
-stability. The most important gain comes from adapting the detector to the football domain.
+The fine-tuned pipeline significantly outperforms the baseline on ball coverage and tracking stability. The most important gain comes from adapting the detector to the football domain.
 
 \begin{table}[H]
 \centering
-\caption{Main comparison between the baseline and the full pipeline. Replace values if a future run changes the model or video.}
+\caption{Main comparison between the baseline and the full pipeline.}
 \begin{tabular}{lrrrrr}
 \toprule
 Variant & Ball coverage & Player tracks & Avg track length & Max track length & Referee frames \\
@@ -184,9 +144,7 @@ finetuned\_full & 91.7\% & 50 & 305.7 & 750 & 750 \\
 \end{table}
 
 \subsection{Ablation Study}
-Removing ball interpolation reduces ball coverage by 71 frames. Turning off camera motion or team
-assignment has little effect on ball coverage, but it changes the downstream stability and
-interpretability of the analysis outputs.
+Removing ball interpolation reduces ball coverage by 71 frames. Turning off camera motion or team assignment has little effect on ball coverage, but it changes the downstream stability and interpretability of the analysis outputs.
 
 \begin{table}[H]
 \centering
@@ -206,45 +164,34 @@ finetuned\_no\_team & 91.7\% & 617 & 71 & N/A \\
 \subsection{Qualitative Results}
 \begin{figure}[H]
 \centering
-\placeholderfigure{TODO: insert a screenshot from the baseline annotated video}
-\caption{Baseline output example.}
+\includegraphics[width=\textwidth]{baseline-screenshot.png}
 \end{figure}
 
 \begin{figure}[H]
 \centering
-\placeholderfigure{TODO: insert a screenshot from the fine-tuned full pipeline output}
+\includegraphics[width=\textwidth]{finetuned_full-screenshot.png}
 \caption{Fine-tuned full pipeline output example.}
 \end{figure}
 
 \section{Discussion}
-The gap between the baseline and the fine-tuned model is consistent with the expectations of deep
-representation learning. The domain-specific model learns football-specific features such as jersey
-patterns, pitch context, and the visual appearance of the ball under broadcast conditions.
+The gap between the baseline and the fine-tuned model is consistent with the expectations of deep representation learning. The domain-specific model learns football-specific features such as jersey patterns, pitch context, and the visual appearance of the ball under broadcast conditions.
 
-Ball interpolation is a useful temporal prior: it does not invent new information, but it smooths
-short occlusion gaps and makes the final trajectory more complete. In contrast, camera motion
-compensation and team assignment primarily affect the interpretability and coherence of the
-analysis outputs rather than the raw ball coverage.
+Ball interpolation is a useful temporal prior: it does not invent new information, but it smooths short occlusion gaps and makes the final trajectory more complete. In contrast, camera motion compensation and team assignment primarily affect the interpretability and coherence of the analysis outputs rather than the raw ball coverage.
 
-Typical failure modes include the ball being airborne, extreme motion blur, partial occlusions near
-clusters of players, and visually ambiguous goalkeepers. These errors are tied to object scale,
-appearance variability, and the limitations of a frame-based detector.
+Typical failure modes include the ball being airborne, extreme motion blur, partial occlusions near clusters of players, and visually ambiguous goalkeepers. These errors are tied to object scale, appearance variability, and the limitations of a frame-based detector.
 
 \section{Limitations and Future Work}
-The evaluation is based on a limited number of broadcast videos and a single camera viewpoint.
-Future work could include more ball examples, improved small-object detection, temporal models,
-multi-view calibration, and stronger camera-motion compensation.
+The evaluation is based on a limited number of broadcast videos and a single camera viewpoint. Future work could include more ball examples, improved small-object detection, temporal models, multi-view calibration, and stronger camera-motion compensation.
 
 \section{Conclusion}
-This project demonstrates a practical football analysis pipeline that combines YOLOv8 detection,
-multi-object tracking, lightweight team inference, and ball recovery heuristics. The fine-tuned model
-substantially improves ball coverage and tracking stability over a generic baseline, which makes it a
-strong foundation for higher-level football analytics.
+This project demonstrates a practical football analysis pipeline that combines YOLOv8 detection, multi-object tracking, lightweight team inference, and ball recovery heuristics. The fine-tuned model substantially improves ball coverage and tracking stability over a generic baseline, which makes it a strong foundation for higher-level football analytics.
 
 \begin{thebibliography}{9}
-\bibitem{yolov8} Ultralytics. YOLOv8 Documentation.\newline \url{https://docs.ultralytics.com/}
-\bibitem{bytetrack} Y. Zhang et al. ByteTrack: Multi-Object Tracking by Associating Every Detection Box.
-\bibitem{football} Football players detection dataset, Roboflow export.
+\bibitem{youtube_tutorial} Public tutorial that inspired the project: \textit{Build an AI/ML Football Analysis system with YOLO, OpenCV, and Python
+}\newline \url{https://www.youtube.com/watch?v=neBZ6huolkg}
+\bibitem{yolov8} Ultralytics. YOLOv8 Documentation.\newline \url{https://docs.ultralytics.com/models/yolov8} — \url{https://yolov8.com/}
+\bibitem{bytetrack} Y. Zhang et al. \textit{ByteTrack: Multi-Object Tracking by Associating Every Detection Box}\newline \url{https://arxiv.org/abs/2110.06864}
+\bibitem{football} \textit{football-players-detection} dataset, Roboflow export.\newline \url{https://universe.roboflow.com/roboflow-jvuqo/football-players-detection-3zvbc/dataset/1}
 \end{thebibliography}
 
 \end{document}

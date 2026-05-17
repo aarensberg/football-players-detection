@@ -9,11 +9,13 @@
 \usepackage{array}
 \usepackage{graphicx}
 \usepackage{hyperref}
+\usepackage{tikz}
+\usetikzlibrary{shapes.arrows, positioning}
 
-\title[Football Analysis]{Deep Learning for Football Match Analysis with YOLOv8 and Multi-Object Tracking}
-\author{Your Name}
-\institute{Albert School \textbar{} Applied Project}
-\date{\today}
+\title[Applied Project — Football Analysis]{Deep Learning for Football Match Analysis with YOLOv8 and Multi-Object Tracking}
+\author{Alessandro ARENSBERG}
+\institute{Albert School}
+\date{May 17, 2026}
 
 \newcommand{\placeholderfigure}[1]{%
   \fbox{\parbox[c][3.2cm][c]{0.96\linewidth}{\centering \textit{#1}}}%
@@ -41,7 +43,30 @@
 \section{Pipeline}
 \begin{frame}{Approach Overview}
   \centering
-  \placeholderfigure{TODO: insert a pipeline diagram: YOLOv8 $\rightarrow$ tracking $\rightarrow$ team assignment $\rightarrow$ ball interpolation $\rightarrow$ metrics}
+  \begin{tikzpicture}[
+    node distance=1.5cm,
+    every node/.style={
+      draw,
+      rectangle,
+      rounded corners=0.2cm,
+      minimum width=1.6cm,
+      minimum height=0.7cm,
+      font=\small,
+      align=center
+    },
+    every edge/.style={draw, thick, -stealth}
+  ]
+    \node (yolo) {YOLOv8};
+    \node (tracking) [right=of yolo] {Tracking};
+    \node (team) [right=of tracking] {Team\\assignment};
+    \node (interp) [right=of team] {Ball\\interpolation};
+    \node (metrics) [right=of interp] {Metrics};
+    
+    \draw (yolo) edge (tracking)
+          (tracking) edge (team)
+          (team) edge (interp)
+          (interp) edge (metrics);
+  \end{tikzpicture}
 \end{frame}
 
 \begin{frame}{Method Summary}
@@ -145,12 +170,12 @@
 \section{Qualitative Results}
 \begin{frame}{Annotated Output: Baseline}
   \centering
-  \placeholderfigure{TODO: insert screenshot from baseline output video}
+  \includegraphics[width=0.85\textwidth]{baseline-screenshot.png}
 \end{frame}
 
 \begin{frame}{Annotated Output: Fine-Tuned Full}
   \centering
-  \placeholderfigure{TODO: insert screenshot from fine-tuned full output video}
+  \includegraphics[width=0.85\textwidth]{finetuned_full-screenshot.png}
 \end{frame}
 
 \section{Discussion}
