@@ -10,7 +10,7 @@ from src.video_io import VideoReader, VideoWriter, build_output_video_path
 from src.visualization import draw_detections
 
 
-def run_pipeline(config: PipelineConfig) -> Path:
+def run_pipeline(config: PipelineConfig, return_detector: bool = False):
     if not config.video_path.exists() or not config.video_path.is_file():
         raise FileNotFoundError(f"Input video not found: {config.video_path}")
 
@@ -25,11 +25,15 @@ def run_pipeline(config: PipelineConfig) -> Path:
         extension="mp4",
     )
     writer = VideoWriter(output_path, reader.meta)
-    team_assigner = TeamAssigner()
-    ball_interpolator = BallInterpolator(
-        max_gap_frames=config.ball_interpolation_max_gap,
-        max_center_speed_px_per_frame=config.ball_interpolation_max_center_speed_px_per_frame,
-        max_endpoint_area_change_ratio=config.ball_interpolation_max_endpoint_area_change_ratio,
+    team_assigner = TeamAssigner() if config.enable_team_assignment else None
+    ball_interpolator = (
+        BallInterpolator(
+            max_gap_frames=config.ball_interpolation_max_gap,
+            max_center_speed_px_per_frame=config.ball_interpolation_max_center_speed_px_per_frame,
+            max_endpoint_area_change_ratio=config.ball_interpolation_max_endpoint_area_change_ratio,
+        )
+        if config.enable_ball_interpolation
+        else None
     )
 
     processed_count = 0
@@ -43,10 +47,12 @@ def run_pipeline(config: PipelineConfig) -> Path:
                 continue
 
             detections = detector.infer_and_track(frame, frame_idx)
-            ball_interpolator.record_frame_tracks(
-                frame_idx, detector.tracks.get("ball", {}).get(frame_idx, {})
-            )
-            team_assigner.assign(frame, detections)
+            if ball_interpolator is not None:
+                ball_interpolator.record_frame_tracks(
+                    frame_idx, detector.tracks.get("ball", {}).get(frame_idx, {})
+                )
+            if team_assigner is not None:
+                team_assigner.assign(frame, detections)
             for det in detections:
                 if det.object_type not in {"player", "goalkeeper"}:
                     continue
@@ -69,13 +75,16 @@ def run_pipeline(config: PipelineConfig) -> Path:
         reader.release()
         writer.release()
 
-    interpolation_stats = ball_interpolator.interpolate_tracks(detector.tracks)
-    print(
-        "Ball interpolation summary - "
-        f"observed_frames={interpolation_stats.observed_frames}, "
-        f"interpolated_frames={interpolation_stats.interpolated_frames}, "
-        f"max_gap={config.ball_interpolation_max_gap}"
-    )
+    if ball_interpolator is not None:
+        interpolation_stats = ball_interpolator.interpolate_tracks(detector.tracks)
+        print(
+            "Ball interpolation summary - "
+            f"observed_frames={interpolation_stats.observed_frames}, "
+            f"interpolated_frames={interpolation_stats.interpolated_frames}, "
+            f"max_gap={config.ball_interpolation_max_gap}"
+        )
+    else:
+        print("Ball interpolation disabled for this run.")
 
     print(f"Tracking keys: {list(detector.tracks.keys())}")
     for bucket, frames in detector.tracks.items():
@@ -85,14 +94,19 @@ def run_pipeline(config: PipelineConfig) -> Path:
             f"tracked_objects={tracked_objects}"
         )
 
-    team_summary = team_assigner.summary()
-    t_counts = team_summary["track_team_counts"]
-    print(
-        "Team assignment summary - "
-        f"fitted={team_summary['fitted']}, "
-        f"track_counts: team1={t_counts[1]}, team2={t_counts[2]}, "
-        f"assignment_events={team_summary['assignment_events']}"
-    )
-    for warning in team_summary.get("warnings", []):
-        print(warning)
+    if team_assigner is not None:
+        team_summary = team_assigner.summary()
+        t_counts = team_summary["track_team_counts"]
+        print(
+            "Team assignment summary - "
+            f"fitted={team_summary['fitted']}, "
+            f"track_counts: team1={t_counts[1]}, team2={t_counts[2]}, "
+            f"assignment_events={team_summary['assignment_events']}"
+        )
+        for warning in team_summary.get("warnings", []):
+            print(warning)
+    else:
+        print("Team assignment disabled for this run.")
+    if return_detector:
+        return writer.output_path, detector
     return writer.output_path

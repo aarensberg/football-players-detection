@@ -10,3 +10,4 @@ runs/
 models/
 
 output/*.mp4
+output/experiments/*/*.mp4

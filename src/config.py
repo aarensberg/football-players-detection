@@ -38,6 +38,10 @@ class PipelineConfig:
     detector_weights_mode: str
     detector_weights_path: Path
     tracker_config: str
+    enable_camera_motion: bool
+    enable_ball_interpolation: bool
+    enable_team_assignment: bool
+    meters_per_pixel: Optional[float]
 
 
 def parse_args() -> PipelineConfig:
@@ -215,10 +219,38 @@ def parse_args() -> PipelineConfig:
         default="bytetrack.yaml",
         help="Ultralytics tracker config",
     )
+    parser.add_argument(
+        "--enable-camera-motion",
+        action="store_true",
+        default=False,
+        help="Enable camera-motion compensation (optical flow) if available.",
+    )
+    parser.add_argument(
+        "--enable-ball-interpolation",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable linear ball interpolation for short gaps.",
+    )
+    parser.add_argument(
+        "--enable-team-assignment",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable team assignment from jersey colours.",
+    )
+    parser.add_argument(
+        "--meters-per-pixel",
+        type=float,
+        default=None,
+        help="Optional approximate meters per pixel scale for metric speeds.",
+    )
 
     args = parser.parse_args()
 
-    max_frames = None if args.max_frames is not None and args.max_frames <= 0 else args.max_frames
+    max_frames = (
+        None
+        if args.max_frames is not None and args.max_frames <= 0
+        else args.max_frames
+    )
     detector_weights_mode = args.detector_weights_mode
     detector_weights_path = Path(args.detector_weights_path)
 
@@ -246,10 +278,14 @@ def parse_args() -> PipelineConfig:
             None if args.ball_conf is None else max(0.0, min(1.0, args.ball_conf))
         ),
         ball_min_bbox_area_px=(
-            None if args.ball_min_area_px is None else max(0.0, float(args.ball_min_area_px))
+            None
+            if args.ball_min_area_px is None
+            else max(0.0, float(args.ball_min_area_px))
         ),
         ball_max_bbox_area_px=(
-            None if args.ball_max_area_px is None else max(0.0, float(args.ball_max_area_px))
+            None
+            if args.ball_max_area_px is None
+            else max(0.0, float(args.ball_max_area_px))
         ),
         ball_min_bbox_area_ratio=(
             None
@@ -290,4 +326,10 @@ def parse_args() -> PipelineConfig:
         detector_weights_mode=detector_weights_mode,
         detector_weights_path=detector_weights_path,
         tracker_config=args.tracker_config,
+        enable_camera_motion=bool(args.enable_camera_motion),
+        enable_ball_interpolation=bool(args.enable_ball_interpolation),
+        enable_team_assignment=bool(args.enable_team_assignment),
+        meters_per_pixel=(
+            None if args.meters_per_pixel is None else float(args.meters_per_pixel)
+        ),
     )
