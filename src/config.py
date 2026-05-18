@@ -230,8 +230,8 @@ def parse_args() -> PipelineConfig:
     )
     parser.add_argument(
         "--enable-camera-motion",
-        action="store_true",
-        default=False,
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Enable camera-motion compensation (optical flow) if available.",
     )
     parser.add_argument(

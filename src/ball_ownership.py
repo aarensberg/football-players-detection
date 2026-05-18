@@ -50,6 +50,8 @@ class BallPossessionTracker:
         self.max_distance_m = float(max(0.25, max_distance_m))
         self.summary_state = PossessionSummary()
         self.by_frame: Dict[int, PossessionObservation] = {}
+        self._last_team_id: Optional[int] = None
+        self._first_seen: bool = False
 
     @staticmethod
     def _point_from_bbox(
@@ -74,15 +76,26 @@ class BallPossessionTracker:
         ]
 
         if ball_det is None or not player_dets:
-            obs = PossessionObservation(
-                frame_idx=int(frame_idx),
-                player_track_id=None,
-                team_id=None,
-                distance=None,
-                coordinate_space="unknown",
-            )
+            # If no ball or no players are visible, persist the last known possession
+            if not self._first_seen or self._last_team_id is None:
+                obs = PossessionObservation(
+                    frame_idx=int(frame_idx),
+                    player_track_id=None,
+                    team_id=None,
+                    distance=None,
+                    coordinate_space="unknown",
+                )
+                # Only count unknown until first assignment
+                self.summary_state.unknown_frames += 1
+            else:
+                obs = PossessionObservation(
+                    frame_idx=int(frame_idx),
+                    player_track_id=None,
+                    team_id=self._last_team_id,
+                    distance=None,
+                    coordinate_space="stabilized_px",
+                )
             self.summary_state.observations.append(obs)
-            self.summary_state.unknown_frames += 1
             self.by_frame[int(frame_idx)] = obs
             return obs
 
@@ -128,14 +141,29 @@ class BallPossessionTracker:
             team_id = best_det.team_id
             track_id = best_det.track_id
 
+        # Persist possession: once a team is assigned possession, keep it until another team is
+        # observed to be within threshold. At the very beginning, team may be None.
+        if team_id is None:
+            if not self._first_seen or self._last_team_id is None:
+                # still no assignment
+                assigned_team = None
+            else:
+                assigned_team = self._last_team_id
+        else:
+            assigned_team = team_id
+            # mark that we've observed a first assignment
+            self._first_seen = True
+            self._last_team_id = assigned_team
+
         obs = PossessionObservation(
             frame_idx=int(frame_idx),
             player_track_id=track_id,
-            team_id=team_id,
+            team_id=assigned_team,
             distance=float(best_distance) if np.isfinite(best_distance) else None,
             coordinate_space=coordinate_space,
         )
         self.summary_state.observations.append(obs)
+        # Only update summary counts when we actually observed the ball and players
         self.summary_state.total_visible_frames += 1
         if team_id == 1:
             self.summary_state.team1_frames += 1

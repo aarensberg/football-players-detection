@@ -36,8 +36,12 @@ class TeamAssigner:
         self.min_features_to_fit = max(2, int(min_features_to_fit))
         self.min_crop_size = max(2, int(min_crop_size))
         self.torso_y_start_ratio = float(max(0.0, min(0.7, torso_y_start_ratio)))
-        self.torso_y_end_ratio = float(max(self.torso_y_start_ratio + 0.1, min(1.0, torso_y_end_ratio)))
-        self.torso_side_margin_ratio = float(max(0.0, min(0.35, torso_side_margin_ratio)))
+        self.torso_y_end_ratio = float(
+            max(self.torso_y_start_ratio + 0.1, min(1.0, torso_y_end_ratio))
+        )
+        self.torso_side_margin_ratio = float(
+            max(0.0, min(0.35, torso_side_margin_ratio))
+        )
         self.per_track_history = max(3, int(per_track_history))
         self.per_track_bootstrap_limit = max(1, int(per_track_bootstrap_limit))
         self.init_votes_required = max(1, int(init_votes_required))
@@ -47,7 +51,9 @@ class TeamAssigner:
         self.confidence_margin = float(max(0.0, confidence_margin))
         self.goalkeeper_ambiguity_margin = float(max(0.0, goalkeeper_ambiguity_margin))
         self.goalkeeper_max_distance = float(max(0.0, goalkeeper_max_distance))
-        self.cluster_imbalance_ratio = float(max(0.01, min(0.49, cluster_imbalance_ratio)))
+        self.cluster_imbalance_ratio = float(
+            max(0.01, min(0.49, cluster_imbalance_ratio))
+        )
         self.side_separation_min = float(max(0.0, min(1.0, side_separation_min)))
 
         self.team_centroids: Optional[np.ndarray] = None  # shape (2, 3), normalized HSV
@@ -57,9 +63,13 @@ class TeamAssigner:
             lambda: deque(maxlen=self.per_track_history)
         )
         self._track_votes: Dict[int, Deque[int]] = defaultdict(
-            lambda: deque(maxlen=max(self.per_track_history, self.switch_votes_required + 2))
+            lambda: deque(
+                maxlen=max(self.per_track_history, self.switch_votes_required + 2)
+            )
         )
-        self._track_x_history: Dict[int, Deque[float]] = defaultdict(lambda: deque(maxlen=24))
+        self._track_x_history: Dict[int, Deque[float]] = defaultdict(
+            lambda: deque(maxlen=24)
+        )
         self._bootstrap_track_samples: Dict[int, List[np.ndarray]] = defaultdict(list)
         self._bootstrap_track_x: Dict[int, List[float]] = defaultdict(list)
         self._bootstrap_track_type: Dict[int, str] = {}
@@ -75,7 +85,9 @@ class TeamAssigner:
     def assign(self, frame: np.ndarray, detections: List[Detection]) -> None:
         self._frames_seen += 1
 
-        player_like = [det for det in detections if det.object_type in {"player", "goalkeeper"}]
+        player_like = [
+            det for det in detections if det.object_type in {"player", "goalkeeper"}
+        ]
 
         if self._frames_seen <= self.bootstrap_frames:
             for det in player_like:
@@ -88,12 +100,17 @@ class TeamAssigner:
                     if len(current_samples) < self.per_track_bootstrap_limit:
                         current_samples.append(feature)
                         self._bootstrap_track_type[det.track_id] = det.object_type
-                        self._bootstrap_track_x[det.track_id].append(self._detection_center_x(frame, det))
+                        self._bootstrap_track_x[det.track_id].append(
+                            self._detection_center_x(frame, det)
+                        )
                 elif not self.is_fitted:
                     # Negative track IDs are unstable; do not use for fitting.
                     continue
 
-            if not self.is_fitted and self._bootstrap_sample_count() >= self.min_features_to_fit:
+            if (
+                not self.is_fitted
+                and self._bootstrap_sample_count() >= self.min_features_to_fit
+            ):
                 self._fit()
 
         for det in player_like:
@@ -130,7 +147,10 @@ class TeamAssigner:
         order = self._cluster_to_team_order(labels, sample_x)
         ordered = centers[order].astype(np.float32)
         self.team_centroids = ordered
-        self.team_colors = {idx + 1: self._hsv_feature_to_bgr(center) for idx, center in enumerate(ordered)}
+        self.team_colors = {
+            idx + 1: self._hsv_feature_to_bgr(center)
+            for idx, center in enumerate(ordered)
+        }
 
         counts = np.bincount(labels, minlength=2).astype(int)
         total = int(np.sum(counts))
@@ -154,6 +174,14 @@ class TeamAssigner:
             self._update_track_feature(det.track_id, feature)
         descriptor = self._track_descriptor(det.track_id, fallback_feature=feature)
 
+        # If the underlying model class suggests goalkeeper, prefer goalkeeper path
+        model_class_lower = (
+            str(det.model_class).lower() if det.model_class is not None else ""
+        )
+        treat_as_goalkeeper = (
+            det.object_type == "goalkeeper" or "goalkeeper" in model_class_lower
+        )
+
         if not self.is_fitted or descriptor is None:
             if det.track_id >= 0 and det.track_id in self.track_to_team:
                 cached_team = self.track_to_team[det.track_id]
@@ -168,8 +196,10 @@ class TeamAssigner:
         if self._fit_imbalanced:
             confidence_ok = confidence_ok and margin >= self.confidence_margin * 1.25
 
-        if det.object_type == "goalkeeper":
-            team_id = self._assign_goalkeeper_track(det.track_id, raw_team, min_dist, margin)
+        if treat_as_goalkeeper:
+            team_id = self._assign_goalkeeper_track(
+                det.track_id, raw_team, min_dist, margin
+            )
         else:
             vote = raw_team if confidence_ok else 0
             team_id = self._resolve_stable_track_team(det.track_id, vote)
@@ -182,7 +212,9 @@ class TeamAssigner:
 
         return team_id, self.team_colors.get(team_id)
 
-    def _extract_feature(self, frame: np.ndarray, bbox: List[float]) -> Optional[np.ndarray]:
+    def _extract_feature(
+        self, frame: np.ndarray, bbox: List[float]
+    ) -> Optional[np.ndarray]:
         if frame is None or frame.size == 0 or len(bbox) != 4:
             return None
 
@@ -273,7 +305,9 @@ class TeamAssigner:
         arr = hsv.astype(np.float32).reshape(-1)
         if arr.shape[0] != 3:
             return np.zeros(3, dtype=np.float32)
-        return np.asarray([arr[0] / 179.0, arr[1] / 255.0, arr[2] / 255.0], dtype=np.float32)
+        return np.asarray(
+            [arr[0] / 179.0, arr[1] / 255.0, arr[2] / 255.0], dtype=np.float32
+        )
 
     @staticmethod
     def _hsv_feature_to_bgr(feature: np.ndarray) -> Tuple[int, int, int]:
@@ -338,18 +372,28 @@ class TeamAssigner:
         else:
             return None, None
 
-        if samples.ndim != 2 or samples.shape[1] != 3 or len(samples) < self.min_features_to_fit:
+        if (
+            samples.ndim != 2
+            or samples.shape[1] != 3
+            or len(samples) < self.min_features_to_fit
+        ):
             return None, None
 
         if keeper_rows and player_rows:
             limited_keepers = np.concatenate([x[:2] for x in keeper_rows], axis=0)
             limited_keepers_x = np.concatenate([x[:2] for x in keeper_x], axis=0)
-            samples = np.concatenate([np.concatenate(player_rows, axis=0), limited_keepers], axis=0)
-            sample_x = np.concatenate([np.concatenate(player_x, axis=0), limited_keepers_x], axis=0)
+            samples = np.concatenate(
+                [np.concatenate(player_rows, axis=0), limited_keepers], axis=0
+            )
+            sample_x = np.concatenate(
+                [np.concatenate(player_x, axis=0), limited_keepers_x], axis=0
+            )
 
         return samples.astype(np.float32), sample_x.astype(np.float32)
 
-    def _cluster_to_team_order(self, labels: np.ndarray, sample_x: np.ndarray) -> np.ndarray:
+    def _cluster_to_team_order(
+        self, labels: np.ndarray, sample_x: np.ndarray
+    ) -> np.ndarray:
         counts = np.bincount(labels, minlength=2).astype(int)
         x_medians = np.asarray(
             [
@@ -367,10 +411,14 @@ class TeamAssigner:
         team2_cluster = 1 - team1_cluster
         return np.asarray([team1_cluster, team2_cluster], dtype=int)
 
-    def _closest_team(self, descriptor: np.ndarray) -> tuple[Optional[int], float, float]:
+    def _closest_team(
+        self, descriptor: np.ndarray
+    ) -> tuple[Optional[int], float, float]:
         if self.team_centroids is None:
             return None, float("inf"), 0.0
-        distances = np.linalg.norm(self.team_centroids - descriptor.reshape(1, 3), axis=1)
+        distances = np.linalg.norm(
+            self.team_centroids - descriptor.reshape(1, 3), axis=1
+        )
         if distances.shape[0] != 2:
             return None, float("inf"), 0.0
         closest = int(np.argmin(distances))
@@ -393,21 +441,30 @@ class TeamAssigner:
         majority_ratio = majority_count / max(1, len(votes))
 
         if existing is None:
-            if len(votes) >= self.init_votes_required and majority_ratio >= self.init_majority_ratio:
+            if (
+                len(votes) >= self.init_votes_required
+                and majority_ratio >= self.init_majority_ratio
+            ):
                 return int(majority_team)
             return None
 
         if majority_team == existing:
             return existing
 
-        if len(votes) >= self.switch_votes_required and majority_ratio >= self.switch_majority_ratio:
+        if (
+            len(votes) >= self.switch_votes_required
+            and majority_ratio >= self.switch_majority_ratio
+        ):
             return int(majority_team)
         return existing
 
     def _assign_goalkeeper_track(
         self, track_id: int, raw_team: int, min_dist: float, margin: float
     ) -> Optional[int]:
-        use_color = margin >= self.goalkeeper_ambiguity_margin and min_dist <= self.goalkeeper_max_distance
+        use_color = (
+            margin >= self.goalkeeper_ambiguity_margin
+            and min_dist <= self.goalkeeper_max_distance
+        )
         color_vote = raw_team if use_color else 0
         stable_from_color = self._resolve_stable_track_team(track_id, color_vote)
         if stable_from_color is not None:
@@ -426,7 +483,9 @@ class TeamAssigner:
         median_x = float(np.median(np.asarray(xs, dtype=np.float32)))
         return 1 if median_x < 0.5 else 2
 
-    def _update_track_x(self, det: Detection, frame: Optional[np.ndarray] = None) -> None:
+    def _update_track_x(
+        self, det: Detection, frame: Optional[np.ndarray] = None
+    ) -> None:
         if det.track_id < 0:
             return
         if frame is None:
