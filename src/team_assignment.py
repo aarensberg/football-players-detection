@@ -70,9 +70,15 @@ class TeamAssigner:
         self._track_x_history: Dict[int, Deque[float]] = defaultdict(
             lambda: deque(maxlen=24)
         )
+        self._track_y_history: Dict[int, Deque[float]] = defaultdict(
+            lambda: deque(maxlen=24)
+        )
         self._bootstrap_track_samples: Dict[int, List[np.ndarray]] = defaultdict(list)
         self._bootstrap_track_x: Dict[int, List[float]] = defaultdict(list)
         self._bootstrap_track_type: Dict[int, str] = {}
+        self._goalkeeper_frozen_teams: Dict[int, int] = (
+            {}
+        )  # track_id -> frozen_team_id for goalkeepers
         self._frames_seen = 0
         self._assignment_events = {1: 0, 2: 0}
         self._warnings: List[str] = []
@@ -169,6 +175,10 @@ class TeamAssigner:
         self, frame: np.ndarray, det: Detection
     ) -> tuple[Optional[int], Optional[Tuple[int, int, int]]]:
         self._update_track_x(det, frame=frame)
+        self._update_track_y(
+            det, frame=frame
+        )  # Track Y position for goalkeeper heuristic
+
         feature = self._extract_feature(frame, det.bbox)
         if feature is not None and det.track_id >= 0:
             self._update_track_feature(det.track_id, feature)
@@ -181,6 +191,12 @@ class TeamAssigner:
         treat_as_goalkeeper = (
             det.object_type == "goalkeeper" or "goalkeeper" in model_class_lower
         )
+
+        # HEURISTIC: If player is spatially positioned as a goalkeeper, treat as goalkeeper
+        if not treat_as_goalkeeper and det.object_type == "player":
+            treat_as_goalkeeper = self._is_likely_goalkeeper_by_position(
+                det.track_id, frame
+            )
 
         if not self.is_fitted or descriptor is None:
             if det.track_id >= 0 and det.track_id in self.track_to_team:
@@ -461,18 +477,75 @@ class TeamAssigner:
     def _assign_goalkeeper_track(
         self, track_id: int, raw_team: int, min_dist: float, margin: float
     ) -> Optional[int]:
+        """Assign goalkeeper team with extreme conservatism and freeze team assignment."""
+        # If team is already frozen for this goalkeeper, return frozen team
+        if track_id in self._goalkeeper_frozen_teams:
+            return self._goalkeeper_frozen_teams[track_id]
+
+        existing = self.track_to_team.get(track_id)
+
+        # CRITICAL: Check if color signal is strong enough to use at all
+        # Stricter margin for goalkeepers to avoid oscillations
         use_color = (
-            margin >= self.goalkeeper_ambiguity_margin
+            margin >= self.goalkeeper_ambiguity_margin * 2  # Much stricter threshold
             and min_dist <= self.goalkeeper_max_distance
         )
-        color_vote = raw_team if use_color else 0
-        stable_from_color = self._resolve_stable_track_team(track_id, color_vote)
-        if stable_from_color is not None:
-            return stable_from_color
+
+        # If we have a prior assignment, stick with it UNLESS overwhelming evidence for switch
+        if existing is not None:
+            if not use_color:
+                # Color signal is weak/ambiguous, keep prior assignment
+                return existing
+
+            if raw_team == existing:
+                # Same team suggested, reinforce it and freeze if stable
+                if track_id not in self._goalkeeper_frozen_teams:
+                    votes = [
+                        v for v in self._track_votes.get(track_id, []) if v == existing
+                    ]
+                    if len(votes) >= self.init_votes_required:
+                        # Freeze the team after sufficient votes
+                        self._goalkeeper_frozen_teams[track_id] = existing
+                return existing
+
+            # Different team suggested. Require very strong voting evidence to switch.
+            votes_for_raw = [
+                v for v in self._track_votes.get(track_id, []) if v == raw_team
+            ]
+            votes_for_existing = [
+                v for v in self._track_votes.get(track_id, []) if v == existing
+            ]
+
+            # Require 3x more votes for raw_team to justify switching
+            if len(votes_for_raw) < self.switch_votes_required * 3:
+                return existing
+            if (
+                len(votes_for_existing) > 0
+                and len(votes_for_raw) < len(votes_for_existing) * 3
+            ):
+                return existing
+
+            # Only switch if overwhelming evidence
+            return raw_team
+
+        # No prior assignment: bootstrap phase
+        if use_color:
+            # Record vote for bootstrap
+            self._track_votes[track_id].append(raw_team)
+            if len(self._track_votes[track_id]) >= self.init_votes_required:
+                counter = Counter(self._track_votes[track_id])
+                majority_team, _ = counter.most_common(1)[0]
+                # Freeze the team after initial assignment
+                self._goalkeeper_frozen_teams[track_id] = int(majority_team)
+                return int(majority_team)
+            return None
+
+        # No color signal, try spatial fallback
         fallback = self._goalkeeper_side_fallback(track_id)
         if fallback is not None:
-            return fallback
-        return raw_team if use_color else None
+            # Freeze the fallback assignment as well
+            self._goalkeeper_frozen_teams[track_id] = fallback
+        return fallback
 
     def _goalkeeper_side_fallback(self, track_id: int) -> Optional[int]:
         if track_id < 0:
@@ -494,11 +567,103 @@ class TeamAssigner:
         cx = self._detection_center_x(frame, det)
         self._track_x_history[det.track_id].append(cx)
 
+    def _update_track_y(
+        self, det: Detection, frame: Optional[np.ndarray] = None
+    ) -> None:
+        """Track Y (vertical) position for goalkeeper spatial heuristic."""
+        if det.track_id < 0 or frame is None:
+            return
+        cy = self._detection_center_y(frame, det)
+        self._track_y_history[det.track_id].append(cy)
+
+    def _is_likely_goalkeeper_by_position(
+        self, track_id: int, frame: np.ndarray
+    ) -> bool:
+        """Heuristic: player near top/bottom edge for many frames is likely a goalkeeper."""
+        if track_id < 0:
+            return False
+
+        ys = self._track_y_history.get(track_id)
+        if not ys or len(ys) < 10:
+            return False  # Need at least 10 frames of history
+
+        frame_h = frame.shape[0]
+        keeper_zone_top = 0.15 * frame_h
+        keeper_zone_bottom = 0.85 * frame_h
+
+        # Check what fraction of frames are in goalkeeper zones
+        in_zone = sum(1 for y in ys if y < keeper_zone_top or y > keeper_zone_bottom)
+        in_zone_ratio = in_zone / len(ys)
+
+        # If >70% of frames in keeper zones, likely a goalkeeper
+        return in_zone_ratio >= 0.7
+
+    def inherit_team_by_proximity(
+        self,
+        detections: list,
+        frame: Optional[np.ndarray] = None,
+        max_dist: float = 0.08,
+    ) -> None:
+        """If a newly-seen track is spatially very close to a previously-known track
+        with a stable team, inherit that team to reduce fragmentation-driven flips.
+
+        - `max_dist` is normalized (0..1) fraction of image diagonal.
+        """
+        if frame is None:
+            return
+        h, w = frame.shape[:2]
+        diag = (h * h + w * w) ** 0.5
+
+        # Build map of last known positions for tracks that already have team assignments
+        last_positions = {}
+        for t_id, team in self.track_to_team.items():
+            xs = list(self._track_x_history.get(t_id, []))
+            ys = list(self._track_y_history.get(t_id, []))
+            if xs and ys and len(xs) == len(ys):
+                last_positions[t_id] = (xs[-1], ys[-1], team)
+
+        for det in detections:
+            if det.track_id < 0:
+                continue
+            if det.track_id in self.track_to_team:
+                continue
+            cx = self._detection_center_x(frame, det)
+            cy = self._detection_center_y(frame, det)
+
+            # Find closest known track
+            best = None
+            best_dist = float("inf")
+            for t_id, (lx, ly, team) in last_positions.items():
+                dx = (cx - lx) * w
+                dy = (cy - ly) * h
+                dist = (dx * dx + dy * dy) ** 0.5
+                if dist < best_dist:
+                    best_dist = dist
+                    best = (t_id, team, dist)
+
+            if best is None:
+                continue
+
+            # Convert normalized threshold to pixels approximately using diagonal
+            px_thresh = max_dist * diag
+            if best[2] <= px_thresh:
+                # inherit team
+                self.track_to_team[det.track_id] = int(best[1])
+                # also add a vote to stabilize future decisions
+                self._track_votes[det.track_id].append(int(best[1]))
+
+    @staticmethod
     @staticmethod
     def _detection_center_x(frame: np.ndarray, det: Detection) -> float:
         x1, _, x2, _ = det.bbox
         w = max(1.0, float(frame.shape[1]))
         return float(np.clip((float(x1) + float(x2)) * 0.5 / w, 0.0, 1.0))
+
+    @staticmethod
+    def _detection_center_y(frame: np.ndarray, det: Detection) -> float:
+        _, y1, _, y2 = det.bbox
+        h = max(1.0, float(frame.shape[0]))
+        return float(np.clip((float(y1) + float(y2)) * 0.5 / h, 0.0, 1.0))
 
     def summary(self) -> Dict[str, object]:
         team_track_counts = {1: 0, 2: 0}

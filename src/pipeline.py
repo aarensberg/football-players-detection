@@ -72,6 +72,66 @@ def run_pipeline(config: PipelineConfig, return_detector: bool = False):
                 continue
 
             detections = detector.infer_and_track(frame, frame_idx)
+
+            # Suppress duplicate detections using IoU-based deduplication
+            # Prefer detections from tracks that already have a team assignment.
+            # Save removed detections to track memory for potential reactivation on next frames.
+            def _dedupe_detections_iou(dets, iou_thresh=0.4):
+                kept = []
+                kept_bboxes = []
+                removed = []  # Track removed detections
+
+                # Prefer detections with team assignment, then by score
+                def _sort_key(d):
+                    has_team = False
+                    try:
+                        has_team = (
+                            team_assigner is not None
+                            and d.track_id in team_assigner.track_to_team
+                        )
+                    except Exception:
+                        has_team = False
+                    return (0 if has_team else 1, -getattr(d, "score", 0.0))
+
+                dets_sorted = sorted(dets, key=_sort_key)
+                for d in dets_sorted:
+                    d_bbox = np.array(d.bbox, dtype=np.float32)
+                    overlaps = False
+                    for k_bbox in kept_bboxes:
+                        iou = detector._bbox_iou(d_bbox, k_bbox)
+                        if iou > iou_thresh:
+                            overlaps = True
+                            break
+                    if not overlaps:
+                        kept.append(d)
+                        kept_bboxes.append(d_bbox)
+                    else:
+                        removed.append(d)
+
+                # Save removed detections to track memory for reactivation on future frames
+                for d in removed:
+                    if d.object_type != "ball" and d.track_id >= 0:
+                        detector.track_memory[d.track_id] = {
+                            "frame_idx": frame_idx,
+                            "bbox": d.bbox,
+                            "object_type": d.object_type,
+                            "class_id": d.class_id,
+                        }
+                return kept
+
+            detections = _dedupe_detections_iou(detections, iou_thresh=0.4)
+
+            # Try to reactivate recently terminated tracks from memory
+            # This happens AFTER deduplication so track memory has recent data
+            detector._try_reactivate_from_track_memory(detections, frame_idx)
+
+            # Inherit team assignments for fragmented tracks by proximity to known tracks
+            if team_assigner is not None:
+                # Use a slightly larger proximity threshold to catch fragmented
+                # tracks that appear near previous stable tracks.
+                team_assigner.inherit_team_by_proximity(
+                    detections, frame=frame, max_dist=0.12
+                )
             if ball_interpolator is not None:
                 ball_interpolator.record_frame_tracks(
                     frame_idx, detector.tracks.get("ball", {}).get(frame_idx, {})

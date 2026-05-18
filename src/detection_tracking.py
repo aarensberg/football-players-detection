@@ -68,6 +68,11 @@ class DetectionTracker:
         self.last_frame_debug: Dict[str, object] = {}
         self.frame_geometry: Dict[int, Dict[str, object]] = {}
         self.possession_summary: Dict[str, object] = {}
+        # Track memory: keep recently terminated tracks for reactivation
+        self.track_memory: Dict[int, Dict[str, object]] = (
+            {}
+        )  # track_id -> {"frame_idx", "bbox", "object_type", "class_id"}
+        self.track_memory_frames = 5  # Keep track memory for 5 frames
         if self.using_fallback_model:
             print(
                 "[INFO] Using generic YOLO model yolov8n.pt; "
@@ -572,29 +577,89 @@ class DetectionTracker:
         if track_id < 0 or object_type not in {"player", "goalkeeper"}:
             return object_type
 
-        required = self.config.goalkeeper_switch_frames
+        # Use a sliding window with majority vote instead of consecutive frames.
+        # This is more robust to detector oscillations.
+        # CRITICAL: Detector oscillates every 1-3 frames, so window must be MUCH larger
+        # to filter out these oscillations. Using 15 frames instead of 5-7.
+        window_size = 15  # Increased from max(5, config.goalkeeper_switch_frames + 2)
         state = self.player_goalkeeper_state.setdefault(
             track_id,
-            {"stable": object_type, "candidate": None, "candidate_count": 0},
+            {"history": [], "stable": object_type},
         )
-        stable = str(state["stable"])
-        if object_type == stable:
-            state["candidate"] = None
-            state["candidate_count"] = 0
+        history: list = state.get("history", [])
+        history.append(object_type)
+
+        # Keep only the last window_size observations
+        if len(history) > window_size:
+            history = history[-window_size:]
+        state["history"] = history
+
+        stable = state.get("stable", object_type)
+
+        # Count votes for each class
+        goalkeeper_count = sum(1 for x in history if x == "goalkeeper")
+        player_count = sum(1 for x in history if x == "player")
+
+        # Majority threshold: need more than half the votes
+        threshold = (len(history) + 1) // 2
+
+        # Accept the new type if it has majority vote
+        if goalkeeper_count >= threshold:
+            state["stable"] = "goalkeeper"
+            return "goalkeeper"
+        elif player_count >= threshold:
+            state["stable"] = "player"
+            return "player"
+        else:
+            # No consensus yet, return current stable
             return stable
 
-        if state.get("candidate") == object_type:
-            state["candidate_count"] = int(state.get("candidate_count", 0)) + 1
-        else:
-            state["candidate"] = object_type
-            state["candidate_count"] = 1
+    def _try_reactivate_from_track_memory(
+        self, detections: List[Detection], frame_idx: int
+    ) -> Dict[int, int]:
+        """Try to reactivate recently terminated tracks if nearby detections appear.
+        Returns a mapping of (new_track_id -> old_track_id) for relabeled detections.
+        """
+        remap = {}
+        frame_cutoff = frame_idx - self.track_memory_frames
+        memory_to_remove = [
+            tid
+            for tid, info in self.track_memory.items()
+            if info.get("frame_idx", 0) <= frame_cutoff
+        ]
+        for tid in memory_to_remove:
+            del self.track_memory[tid]
 
-        if int(state["candidate_count"]) >= required:
-            state["stable"] = object_type
-            state["candidate"] = None
-            state["candidate_count"] = 0
-            return object_type
-        return stable
+        # For each detection (even newly created ones from ByteTrack), try to match with memory
+        # This allows reactivation of fragmented tracks (e.g., track 99 -> track 116)
+        for det in detections:
+            if det.object_type == "ball":
+                continue
+
+            det_bbox = np.array(det.bbox, dtype=float)
+            best_match = None
+            best_iou = 0.0
+            for mem_id, mem_info in self.track_memory.items():
+                mem_bbox = np.array(mem_info["bbox"], dtype=float)
+                iou = self._bbox_iou(det_bbox, mem_bbox)
+                # Reactivate if IoU > 0.2 and same/compatible object type
+                if iou > 0.2 and iou > best_iou:
+                    mem_type = mem_info.get("object_type", "player")
+                    if mem_type == det.object_type or (
+                        mem_type in {"player", "goalkeeper"}
+                        and det.object_type in {"player", "goalkeeper"}
+                    ):
+                        best_match = mem_id
+                        best_iou = iou
+
+            if best_match is not None:
+                # Reactivate the old track_id
+                old_id = det.track_id
+                det.track_id = best_match
+                remap[old_id] = best_match
+                del self.track_memory[best_match]
+
+        return remap
 
     def infer_and_track(self, frame: np.ndarray, frame_idx: int) -> List[Detection]:
         global_detections, non_ball_detections, global_ball_candidates = (
