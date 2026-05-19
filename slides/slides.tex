@@ -15,7 +15,7 @@
 \title[Applied Project — Football Analysis]{Real-time Football Match Analysis:\\From Raw Video to Tactical Insights}
 \author{Alessandro ARENSBERG}
 \institute{Albert School}
-\date{May 19, 2026}
+\date{\today}
 
 \newcommand{\placeholderfigure}[1]{%
   \fbox{\parbox[c][3.2cm][c]{0.96\linewidth}{\centering \textit{#1}}}%
@@ -34,14 +34,21 @@
     \textbf{Watch a 30-second broadcast clip. What does the camera see?}
   \end{center}
   
-  \vspace{0.3cm}
-  \begin{itemize}
-    \item \textbf{22 players} moving at different speeds
-    \item \textbf{2 referees} on the pitch
-    \item \textbf{1 ball} (very small, frequently occluded)
-    \item \textbf{Camera motion} following the action
-    \item \textbf{Compression, blur, lighting changes}
-  \end{itemize}
+  \begin{columns}[T]
+    \column{0.48\textwidth}
+    \vspace{0.3cm}
+    \begin{itemize}
+      \item \textbf{22 players} moving at different speeds
+      \item \textbf{2 referees} on the pitch
+      \item \textbf{1 ball} (very small, frequently occluded)
+      \item \textbf{Camera motion} following the action
+      \item \textbf{Compression, blur, lighting changes}
+    \end{itemize}
+
+    \column{0.48\textwidth}
+    \centering
+    \includegraphics[width=0.95\textwidth]{screenshot-without-predictions.png}
+  \end{columns}
 
   \vspace{0.4cm}
   \textit{Now ask a machine to find all of this, track everyone consistently, and output match statistics.}
@@ -53,7 +60,7 @@
 \section{Why This Matters}
 \begin{frame}{The Real-World Problem}
   \begin{columns}[T]
-    \column{0.48\textwidth}
+    \column{0.65\textwidth}
     \textbf{Use cases:}
     \begin{itemize}
       \small
@@ -62,7 +69,7 @@
       \item Analytics: possession, heat maps
     \end{itemize}
     
-    \column{0.48\textwidth}
+    \vspace{0.35cm}
     \textbf{The bottleneck:}
     \begin{itemize}
       \small
@@ -70,10 +77,14 @@
       \item Broadcasting needs real-time output
       \item Volume is massive (thousands of matches/year)
     \end{itemize}
+
+    \vspace{0.35cm}
+    \textit{We need automation that actually works.}
+
+    \column{0.3\textwidth}
+    \centering
+    \includegraphics[width=0.9\textwidth]{analyse-rickytactics.png}
   \end{columns}
-  
-  \vspace{0.4cm}
-  \textit{We need automation that actually works.}
 \end{frame}
 
 \section{Solution}
@@ -105,19 +116,30 @@
           (team) edge (stats);
   \end{tikzpicture}
   
-  \vspace{0.5cm}
-  \small
-  \begin{itemize}
-    \item \textbf{Detection:} Fine-tuned YOLOv8 on football videos
-    \item \textbf{Tracking:} Persistent IDs + memory for fragmentation
-    \item \textbf{Recovery:} Ball interpolation, ROI search, optical flow
-    \item \textbf{Team Assignment:} Jersey colour clustering
-    \item \textbf{Output:} Speed, distances, possession, formation lines
-  \end{itemize}
+  \vspace{0.35cm}
+  
+  \begin{columns}[T]
+    \column{0.55\textwidth}
+    \small
+    \begin{itemize}
+      \item \textbf{Detection:} Fine-tuned YOLOv8 on football videos
+      \item \textbf{Tracking:} Persistent IDs + memory for fragmentation
+      \item \textbf{Recovery:} Ball interpolation, ROI search, optical flow
+      \item \textbf{Team Assignment:} Jersey colour clustering
+      \item \textbf{Output:} Speed, distances, possession, formation lines
+    \end{itemize}
+
+    \column{0.4\textwidth}
+    \centering
+    \includegraphics[width=0.95\textwidth]{yolov8-architecture-diagram.png}
+  \end{columns}
 \end{frame}
 
 \begin{frame}{Key Technical Insight}
-  \textbf{Naive approach:} Train a big detector, run inference. \textit{Result: fragmented tracks, poor ball coverage.}
+  \textbf{Naive approach:} Train a big detector, run inference. 
+  
+  \vspace{0.1cm}
+  \textit{Result: fragmented tracks, poor ball coverage.}
   
   \vspace{0.3cm}
   \textbf{Our approach:} Detection + \textbf{temporal reasoning}
@@ -141,43 +163,24 @@
       \toprule
       \textbf{Model} & \textbf{Ball Frames} & \textbf{Player Tracks} & \textbf{Referees} & \textbf{Stability} \\
       \midrule
-      Generic YOLOv8n & 736/750 (98\%) & 22,530 & \textbf{0} & Fragmented \\
-      Fine-tuned YOLOv8 & 715/750 (95\%) & 15,488 & \textbf{2,118} & Stable \\
+      Generic YOLOv8n & 327/750 (44\%) & 22,530 & \textbf{0} & Fragmented \\
+      Fine-tuned YOLOv8 & 617/750 (82\%) & 15,488 & \textbf{2,118} & Stable \\
       \bottomrule
     \end{tabular}
   \end{table}
   
-  \vspace{0.3cm}
-  \textbf{Counterintuitive:} Generic model sees \textit{more} ball frames but has 31\% more fragmentation.
-  
-  \vspace{0.2cm}
+  \vspace{0.1cm}  
   \textit{More detections $\neq$ better tracking. Quality beats quantity.}
-\end{frame}
 
-\begin{frame}{What Fine-Tuning Achieved}
-  \begin{itemize}
-    \item \textbf{\textcolor{green}{+}} Referee detection: \textbf{0} $\to$ \textbf{2,118 frames}
-      \begin{itemize}
-        \small
-        \item Generic model completely misses referees
-        \item Critical for tactical analysis
-      \end{itemize}
-    
-    \vspace{0.2cm}
-    \item \textbf{\textcolor{green}{+}} Reduced fragmentation: \textbf{22,530} $\to$ \textbf{15,488 tracks (−31\%)}
-      \begin{itemize}
-        \small
-        \item Fewer identity switches = better downstream stats
-      \end{itemize}
-    
-    \vspace{0.2cm}
-    \item \textbf{\textcolor{green}{+}} Team stability
-      \begin{itemize}
-        \small
-        \item Generic: 78 + 110 fragmented identities
-        \item Fine-tuned: 17 + 33 stable identities
-      \end{itemize}
-  \end{itemize}
+  \begin{columns}[T]
+    \column{0.48\textwidth}
+    \centering
+    \includegraphics[width=0.98\textwidth]{screenshot-baseline.png}
+
+    \column{0.48\textwidth}
+    \centering
+    \includegraphics[width=0.98\textwidth]{screenshot-finetuned_full.png}
+  \end{columns}
 \end{frame}
 
 \begin{frame}{Ablation: What Component Matters Most?}
@@ -274,25 +277,6 @@
   \textit{Not all problems are solvable at the detector level.}
 \end{frame}
 
-\section{Conclusion}
-\begin{frame}{Key Learnings}
-  \begin{enumerate}
-    \item \textbf{Domain knowledge wins:} Football-specific fine-tuning beats generic baseline
-    
-    \vspace{0.15cm}
-    \item \textbf{Temporal reasoning is essential:} Tracking + interpolation $>$ detection alone
-    
-    \vspace{0.15cm}
-    \item \textbf{Post-processing is underrated:} Team freezing, memory, recovery stabilize output
-    
-    \vspace{0.15cm}
-    \item \textbf{Failure analysis reveals gaps:} Not every problem is solvable with bigger models
-  \end{enumerate}
-  
-  \vspace{0.35cm}
-  \textbf{Bottom line:} A careful multi-stage pipeline outperforms naive end-to-end approaches.
-\end{frame}
-
 \begin{frame}{What's Next?}
   \begin{itemize}
     \item Real-time deployment (edge optimization for streaming)
@@ -309,14 +293,9 @@
   \centering
   \Large
   \textbf{Thank You}
-  \vspace{0.6cm}
+  \vspace{0.3cm}
   
-  \\
-  \normalsize
-  Questions?
-  
-  \vspace{0.4cm}
-  {\small Output: \texttt{output/08fd33\_4-colab\_v3\_51e\_1920\_b2-best-...mp4}}
+  \includegraphics[width=0.85\textwidth]{screenshot-with-predictions.png}
 \end{frame}
 
 \end{document}
