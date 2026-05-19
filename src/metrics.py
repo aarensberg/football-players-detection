@@ -60,7 +60,7 @@ class MetricsCollector:
         point_m = point_px.copy()
 
         if bucket_name == "ball":
-            ball_point = geom.get("ball_point", {})
+            ball_point = (geom.get("ball_point") or {})
             ball_px = self._as_point(ball_point.get("stabilized_px"))
             ball_m = self._as_point(ball_point.get("field_m"))
             if ball_px is not None:

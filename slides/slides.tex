@@ -163,8 +163,8 @@
       \toprule
       \textbf{Model} & \textbf{Ball Frames} & \textbf{Player Tracks} & \textbf{Referees} & \textbf{Stability} \\
       \midrule
-      Generic YOLOv8n & 327/750 (44\%) & 22,530 & \textbf{0} & Fragmented \\
-      Fine-tuned YOLOv8 & 617/750 (82\%) & 15,488 & \textbf{2,118} & Stable \\
+      Generic YOLOv8n & 670/750 (89\%) & 190 & \textbf{0} & Fragmented \\
+      Fine-tuned YOLOv8 & 715/750 (95\%) & 46 & \textbf{750} & Stable \\
       \bottomrule
     \end{tabular}
   \end{table}
@@ -193,7 +193,7 @@
       \midrule
       Full pipeline & 715/750 (95.3\%) & — \\
       No interpolation & 664/750 (88.5\%) & −51 frames (−6.8\%) \\
-      No track memory & 700/750 (93.3\%) & −15 frames (−2.0\%) \\
+      No camera motion & 715/750 (95.3\%) & 0 frames on coverage \\
       \bottomrule
     \end{tabular}
   \end{table}
