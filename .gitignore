@@ -11,3 +11,5 @@ models/
 
 output/*.mp4
 output/experiments/*/*.mp4
+
+script.md
