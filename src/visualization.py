@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 
 from src.detection_tracking import Detection
+from src.pitch_geometry import build_pitch_transform, PitchTransform
 
 
 def draw_detections(
@@ -53,6 +54,8 @@ def draw_detections(
 
     if frame_state:
         _draw_hud(rendered, frame_state)
+        _draw_team_lines(rendered, detections, frame_state)
+        _draw_minimap(rendered, detections, frame_state)
     return rendered
 
 
@@ -196,3 +199,199 @@ def _draw_hud(frame: np.ndarray, frame_state: Dict[str, Any]) -> None:
             1,
             cv2.LINE_AA,
         )
+
+
+def _draw_team_lines(
+    frame: np.ndarray, detections: List[Detection], frame_state: Dict[str, Any]
+) -> None:
+    """Draw side-view formation lines for each team using x-axis grouping."""
+    h, w = frame.shape[:2]
+
+    # Group players by team and use stabilized positions when available.
+    teams_players: Dict[int, List[Tuple[int, int, Detection]]] = {}
+    stabilized_points = frame_state.get("player_like_points", {}) if frame_state else {}
+    for det in detections:
+        if det.object_type not in {"player", "goalkeeper"}:
+            continue
+        if det.team_id is None:
+            continue
+
+        if det.team_id not in teams_players:
+            teams_players[det.team_id] = []
+
+        # Get center bottom of bbox (where player stands)
+        x1, y1, x2, y2 = _clip_bbox(det.bbox, w, h)
+        cx = (x1 + x2) // 2
+        cy = y2
+
+        # If a stabilized position exists, reproject it to current frame
+        offset_px = (0.0, 0.0)
+        try:
+            offset_px = (
+                frame_state.get("camera_offset_px", (0.0, 0.0))
+                if frame_state
+                else (0.0, 0.0)
+            )
+        except Exception:
+            offset_px = (0.0, 0.0)
+
+        tracked_player = stabilized_points.get(int(det.track_id))
+        if tracked_player and tracked_player.get("stabilized_px"):
+            stabilized_x, stabilized_y = tracked_player["stabilized_px"]
+            cx = int(stabilized_x + float(offset_px[0]))
+            cy = int(stabilized_y + float(offset_px[1]))
+
+        teams_players[det.team_id].append((cx, cy, det))
+
+    # Draw formation lines by slicing the pitch along the horizontal axis.
+    for team_id, players in teams_players.items():
+        if len(players) < 2:
+            continue
+
+        # Estimate formation layers along x: defensive, midfield, attacking.
+        xs = np.array([x for x, _, _ in players], dtype=np.float32)
+        if len(players) >= 5:
+            thresholds = np.percentile(xs, [33.3, 66.6])
+            band_count = 3
+        elif len(players) >= 3:
+            thresholds = np.percentile(xs, [50.0])
+            band_count = 2
+        else:
+            thresholds = np.array([], dtype=np.float32)
+            band_count = 1
+
+        bands: List[List[Tuple[int, int, Detection]]] = [[] for _ in range(band_count)]
+        for x, y, det in players:
+            band_idx = int(np.searchsorted(thresholds, x, side="right"))
+            bands[band_idx].append((x, y, det))
+
+        for band_idx, band_players in enumerate(bands):
+            if len(band_players) < 2:
+                continue
+
+            # Sort top-to-bottom within each band and connect with the team color.
+            band_players_sorted = sorted(band_players, key=lambda p: p[1])
+            color = _normalize_color(band_players_sorted[0][2].team_color)
+            thickness = 3 if band_idx == 1 and band_count == 3 else 2
+
+            for i in range(len(band_players_sorted) - 1):
+                x1, y1, _ = band_players_sorted[i]
+                x2, y2, _ = band_players_sorted[i + 1]
+                cv2.line(frame, (x1, y1), (x2, y2), color, thickness)
+
+
+def _draw_minimap(
+    frame: np.ndarray, detections: List[Detection], frame_state: Dict[str, Any]
+) -> None:
+    """Draw a small field map in bottom-right corner with a dynamic visible pitch window."""
+    h, w = frame.shape[:2]
+
+    # Build pitch transform based on frame dimensions
+    pitch_transform = build_pitch_transform(
+        image_size=(w, h),
+        mode="scaled",
+        field_length_m=105.0,
+        field_width_m=68.0,
+    )
+
+    # Mini-map dimensions and position
+    minimap_width = 320
+    minimap_height = 200
+    minimap_x = w - minimap_width - 15
+    minimap_y = h - minimap_height - 15
+
+    # Draw semi-transparent background
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (minimap_x, minimap_y), (w - 15, h - 15), (0, 0, 0), -1)
+    cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+
+    # Draw field outline (represents full 105m x 68m)
+    cv2.rectangle(frame, (minimap_x, minimap_y), (w - 15, h - 15), (255, 255, 255), 2)
+
+    # Draw center line and circle (field reference markings)
+    center_x = minimap_x + minimap_width // 2
+    center_y = minimap_y + minimap_height // 2
+    cv2.line(frame, (center_x, minimap_y), (center_x, h - 15), (200, 200, 200), 1)
+    cv2.circle(frame, (center_x, center_y), 15, (200, 200, 200), 1)
+
+    # Add small "goal" rectangles at ends
+    cv2.rectangle(
+        frame,
+        (minimap_x, center_y - 10),
+        (minimap_x + 3, center_y + 10),
+        (100, 100, 255),
+        -1,
+    )
+    cv2.rectangle(
+        frame, (w - 18, center_y - 10), (w - 15, center_y + 10), (255, 100, 100), -1
+    )
+
+    # Estimate the visible horizontal pitch window from the actors currently on screen.
+    visible_field_points: List[Tuple[float, float]] = []
+    player_like_points = (frame_state or {}).get("player_like_points", {})
+    for player_state in player_like_points.values():
+        field_point = player_state.get("field_m")
+        if field_point and len(field_point) == 2:
+            visible_field_points.append((float(field_point[0]), float(field_point[1])))
+
+    ball_state = (frame_state or {}).get("ball_point")
+    if ball_state and ball_state.get("field_m") and len(ball_state["field_m"]) == 2:
+        visible_field_points.append(
+            (float(ball_state["field_m"][0]), float(ball_state["field_m"][1]))
+        )
+
+    if visible_field_points:
+        x_values = np.array([pt[0] for pt in visible_field_points], dtype=np.float32)
+        x_min = float(np.percentile(x_values, 5))
+        x_max = float(np.percentile(x_values, 95))
+        x_span = max(12.0, x_max - x_min)
+        x_margin = max(8.0, 0.22 * x_span)
+        window_x_min = max(0.0, x_min - x_margin)
+        window_x_max = min(105.0, x_max + x_margin)
+        if window_x_max - window_x_min < 18.0:
+            center_x = float(np.median(x_values))
+            window_x_min = max(0.0, center_x - 12.0)
+            window_x_max = min(105.0, center_x + 12.0)
+    else:
+        window_x_min = 0.0
+        window_x_max = 105.0
+
+    # Convert detections to field coordinates and map to minimap
+    for det in detections:
+        x1, y1, x2, y2 = map(float, det.bbox)
+        cx = (x1 + x2) / 2.0
+        cy_bottom = y2
+
+        # Convert image position to field coordinates (meters)
+        field_pos = pitch_transform.image_to_field([cx, cy_bottom])
+        field_x, field_y = field_pos[0], field_pos[1]
+
+        # Normalize using the visible pitch window so video borders do not become pitch borders.
+        x_norm = (field_x - window_x_min) / max(1e-6, window_x_max - window_x_min)
+        y_norm = field_y / 68.0
+
+        x_norm = float(np.clip(x_norm, 0.0, 1.0))
+        y_norm = float(np.clip(y_norm, 0.0, 1.0))
+
+        # Map to minimap pixel coordinates
+        px = int(minimap_x + x_norm * minimap_width)
+        py = int(minimap_y + y_norm * minimap_height)
+
+        # Clamp to minimap bounds
+        px = max(minimap_x + 2, min(w - 17, px))
+        py = max(minimap_y + 2, min(h - 17, py))
+
+        # Draw based on object type
+        if det.object_type == "ball":
+            cv2.circle(frame, (px, py), 4, (0, 220, 255), -1)
+            cv2.circle(frame, (px, py), 4, (255, 255, 255), 1)
+        elif det.object_type in {"player", "goalkeeper"}:
+            color = (
+                _normalize_color(det.team_color) if det.team_color else (200, 200, 200)
+            )
+            radius = 4 if det.object_type == "goalkeeper" else 3
+            cv2.circle(frame, (px, py), radius, color, -1)
+            cv2.circle(frame, (px, py), radius, (255, 255, 255), 1)
+        elif det.object_type == "referee":
+            cv2.circle(frame, (px, py), 3, (160, 160, 160), -1)
+            cv2.circle(frame, (px, py), 3, (255, 255, 255), 1)
